@@ -1,0 +1,23 @@
+{
+  "name": "predicas-libro-worker",
+  "version": "1.0.0",
+  "description": "Worker en segundo plano: transcripción (Groq) y análisis IA",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.3",
+    "@supabase/supabase-js": "^2.45.4",
+    "bullmq": "^5.12.12",
+    "dotenv": "^16.4.5",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "form-data": "^4.0.0",
+    "ioredis": "^5.4.1",
+    "node-fetch": "^3.3.2",
+    "openai": "^4.98.0"
+  }
+}

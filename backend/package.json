@@ -1,0 +1,27 @@
+{
+  "name": "predicas-libro-backend",
+  "version": "1.0.0",
+  "description": "API backend para la plataforma de libro de prédicas",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.3",
+    "@supabase/supabase-js": "^2.108.2",
+    "bullmq": "^5.78.1",
+    "cors": "^2.8.6",
+    "docx": "^9.7.1",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "form-data": "^4.0.0",
+    "ioredis": "^5.11.1",
+    "multer": "^2.2.0",
+    "node-fetch": "^3.3.2",
+    "puppeteer": "^25.1.0"
+  }
+}
