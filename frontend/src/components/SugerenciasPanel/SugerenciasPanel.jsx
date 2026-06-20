@@ -152,7 +152,7 @@ export default function SugerenciasPanel({
   }
 
   return (
-    <>
+    <div className="marginalia-wrapper">
       {/* ---------- Panel de notas (con su propio scroll) ---------- */}
       <div className="marginalia">
         <h3 className="marginalia__header">
@@ -237,6 +237,6 @@ export default function SugerenciasPanel({
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }

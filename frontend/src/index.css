@@ -624,15 +624,24 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 /* ---------- Marginalia (sugerencias como notas adhesivas) ---------- */
-.marginalia {
-  background-color: rgba(251,245,233,0.06);
-  border: 1px dashed rgba(201,163,92,0.35);
-  border-radius: var(--radius);
-  padding: 18px 14px;
-  max-height: 82vh;
-  overflow-y: auto;
+.marginalia-wrapper {
   position: sticky;
   top: 16px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.marginalia {
+  position: relative;
+  background-color: rgba(251,245,233,0.06);
+  border: 1px dashed rgba(201,163,92,0.35);
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding: 18px 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .marginalia__header {
@@ -907,12 +916,15 @@ button { cursor: pointer; font-family: inherit; }
 
 /* ---------- Panel de instrucciones separado (fijo, no scrollea con notas) ---------- */
 .marginalia--instrucciones {
-  position: static;
+  position: relative;
+  flex-shrink: 0;
   max-height: none;
   overflow: visible;
-  margin-top: 16px;
+  margin-top: 0;
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background-color: var(--cover-deep);
 }
-
 .marginalia__instructions-title {
   font-family: var(--font-display);
   font-size: 15px;
