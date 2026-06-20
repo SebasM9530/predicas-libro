@@ -141,6 +141,12 @@ export default function CapituloEditorPage() {
     setCapitulo(cap);
   }
 
+  // Clic en una nota del panel: activarla (esto dispara el scroll hacia
+  // el fragmento resaltado, manejado dentro de CapituloEditorComponent)
+  function handleSeleccionarSugerencia(idSug) {
+    setSugerenciaActivaId(idSug);
+  }
+
   if (cargando && !capitulo) {
     return (
       <div className="page">
@@ -286,7 +292,8 @@ export default function CapituloEditorPage() {
           <CapituloEditorComponent
             capitulo={capitulo}
             sugerencias={sugerencias}
-            onSugerenciaClick={setSugerenciaActivaId}
+            sugerenciaActivaId={sugerenciaActivaId}
+            onSugerenciaClick={handleSeleccionarSugerencia}
             onTextoChange={() => {}}
           />
 
@@ -301,6 +308,7 @@ export default function CapituloEditorPage() {
               capituloId={id}
               sugerencias={sugerencias}
               sugerenciaActivaId={sugerenciaActivaId}
+              onSugerenciaClick={handleSeleccionarSugerencia}
               onLimpiarActiva={() => setSugerenciaActivaId(null)}
               onSugerenciasActualizadas={handleSugerenciasActualizadas}
             />

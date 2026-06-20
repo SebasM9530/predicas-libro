@@ -16,6 +16,7 @@ export default function SugerenciasPanel({
   capituloId,
   sugerencias,
   sugerenciaActivaId,
+  onSugerenciaClick,
   onLimpiarActiva,
   onSugerenciasActualizadas,
 }) {
@@ -32,12 +33,10 @@ export default function SugerenciasPanel({
     await onSugerenciasActualizadas?.();
   });
 
-  // Separar: notas automáticas iniciales vs. instrucciones específicas
   const pendientes = sugerencias.filter((s) => s.estado === 'pendiente' && s.tipo !== 'marcador_seccion');
   const automaticas = pendientes.filter((s) => s.origen === 'automatico');
   const especificas = pendientes.filter((s) => s.origen === 'instruccion_manual');
 
-  // Si hay una sugerencia activa (clic en el editor), mostrar SOLO esa
   const sugerenciaActiva = sugerenciaActivaId
     ? pendientes.find((s) => s.id === sugerenciaActivaId)
     : null;
@@ -97,6 +96,13 @@ export default function SugerenciasPanel({
     }
   }
 
+  // Clic en una nota del panel: marca como activa Y hace scroll en el
+  // manuscrito hasta el fragmento resaltado correspondiente (lo maneja
+  // CapituloEditor mediante el prop sugerenciaActivaId)
+  function handleClickNota(id) {
+    onSugerenciaClick?.(id);
+  }
+
   function renderNota(sug) {
     return (
       <div
@@ -105,11 +111,13 @@ export default function SugerenciasPanel({
           sug.id === sugerenciaActivaId ? 'marginalia__note--activa' : ''
         }`}
         id={`sugerencia-${sug.id}`}
+        onClick={() => handleClickNota(sug.id)}
+        style={{ cursor: 'pointer' }}
       >
         <div className="marginalia__tag">{ETIQUETAS_TIPO[sug.tipo] || sug.tipo}</div>
-        <div className="marginalia__original">{truncar(sug.fragmento_original)}</div>
+        <div className="marginalia__original">{sug.fragmento_original}</div>
         <div className="marginalia__new">
-          {sug.fragmento_nuevo ? truncar(sug.fragmento_nuevo) : '(eliminar)'}
+          {sug.fragmento_nuevo ? sug.fragmento_nuevo : '(eliminar)'}
         </div>
         <div className="marginalia__problem">{sug.problema}</div>
 
@@ -117,7 +125,7 @@ export default function SugerenciasPanel({
           <div className="marginalia__alert">⚠ {sug.nota_adicional}</div>
         )}
 
-        <div className="marginalia__check">
+        <div className="marginalia__check" onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={seleccionadas.has(sug.id)}
@@ -132,7 +140,10 @@ export default function SugerenciasPanel({
         <button
           className="btn btn--ghost btn--small"
           style={{ marginTop: 8 }}
-          onClick={() => handleRechazar(sug.id)}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleRechazar(sug.id);
+          }}
         >
           Descartar nota
         </button>
@@ -141,60 +152,62 @@ export default function SugerenciasPanel({
   }
 
   return (
-    <div className="marginalia">
-      <h3 className="marginalia__header">
-        Notas al margen ({pendientes.length})
-      </h3>
+    <>
+      {/* ---------- Panel de notas (con su propio scroll) ---------- */}
+      <div className="marginalia">
+        <h3 className="marginalia__header">
+          Notas al margen ({pendientes.length})
+        </h3>
 
-      {mensaje && <p className="marginalia__notice">{mensaje}</p>}
+        {mensaje && <p className="marginalia__notice">{mensaje}</p>}
 
-      {sugerenciaActiva ? (
-        // ---------- Vista filtrada: solo la nota seleccionada ----------
-        <>
-          <button className="btn btn--ghost btn--small" onClick={onLimpiarActiva} style={{ marginBottom: 12 }}>
-            ← Ver todas las notas
-          </button>
-          {renderNota(sugerenciaActiva)}
-        </>
-      ) : (
-        // ---------- Vista normal: agrupada ----------
-        <>
-          {pendientes.length === 0 && (
-            <div className="empty-state">
-              <span className="empty-state__icon" style={{ color: 'var(--gold-bright)' }}>···</span>
-              <p className="empty-state__text" style={{ color: 'rgba(248,237,214,0.7)' }}>
-                No hay notas pendientes.
-              </p>
-            </div>
-          )}
+        {sugerenciaActiva ? (
+          <>
+            <button className="btn btn--ghost btn--small" onClick={onLimpiarActiva} style={{ marginBottom: 12 }}>
+              ← Ver todas las notas
+            </button>
+            {renderNota(sugerenciaActiva)}
+          </>
+        ) : (
+          <>
+            {pendientes.length === 0 && (
+              <div className="empty-state">
+                <span className="empty-state__icon" style={{ color: 'var(--gold-bright)' }}>···</span>
+                <p className="empty-state__text" style={{ color: 'rgba(248,237,214,0.7)' }}>
+                  No hay notas pendientes.
+                </p>
+              </div>
+            )}
 
-          {automaticas.length > 0 && (
-            <>
-              <div className="marginalia__group-title">Recomendaciones IA</div>
-              {automaticas.map(renderNota)}
-            </>
-          )}
+            {automaticas.length > 0 && (
+              <>
+                <div className="marginalia__group-title">Recomendaciones IA</div>
+                {automaticas.map(renderNota)}
+              </>
+            )}
 
-          {especificas.length > 0 && (
-            <>
-              <div className="marginalia__group-title">Recomendaciones específicas IA</div>
-              {especificas.map(renderNota)}
-            </>
-          )}
-        </>
-      )}
+            {especificas.length > 0 && (
+              <>
+                <div className="marginalia__group-title">Recomendaciones específicas IA</div>
+                {especificas.map(renderNota)}
+              </>
+            )}
+          </>
+        )}
 
-      {pendientes.length > 0 && !sugerenciaActiva && (
-        <div className="marginalia__apply-bar">
-          <button className="btn btn--primary" onClick={handleAplicar} disabled={aplicando || seleccionadas.size === 0}>
-            {aplicando ? 'Aplicando...' : `Aplicar seleccionados (${seleccionadas.size})`}
-          </button>
-        </div>
-      )}
+        {pendientes.length > 0 && !sugerenciaActiva && (
+          <div className="marginalia__apply-bar">
+            <button className="btn btn--primary" onClick={handleAplicar} disabled={aplicando || seleccionadas.size === 0}>
+              {aplicando ? 'Aplicando...' : `Aplicar seleccionados (${seleccionadas.size})`}
+            </button>
+          </div>
+        )}
+      </div>
 
-      <div className="marginalia__instructions">
-        <h4>Instrucciones generales</h4>
-        <p>
+      {/* ---------- Panel de instrucciones, SEPARADO y fijo debajo ---------- */}
+      <div className="marginalia marginalia--instrucciones">
+        <h4 className="marginalia__instructions-title">Instrucciones generales</h4>
+        <p className="marginalia__instructions-hint">
           Ej. "Elimina las partes donde doy una opinión personal" o "resume las introducciones largas".
         </p>
         <form onSubmit={handleEnviarInstruccion}>
@@ -224,11 +237,6 @@ export default function SugerenciasPanel({
           </div>
         )}
       </div>
-    </div>
+    </>
   );
-}
-
-function truncar(texto, max) {
-  if (!texto) return '';
-  return texto.length > max ? texto.slice(0, max) + '...' : texto;
 }

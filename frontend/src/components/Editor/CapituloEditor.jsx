@@ -86,7 +86,20 @@ function aplicarMarcas(editor, sugerencias) {
   editor.commands.setTextSelection(0);
 }
 
-export default function CapituloEditor({ capitulo, sugerencias, onSugerenciaClick, onTextoChange }) {
+/**
+ * Hace scroll suave hasta el primer elemento con data-sugerencia-id
+ * correspondiente, centrándolo en la pantalla.
+ */
+function scrollHastaMarcaEnTexto(sugerenciaId) {
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`mark[data-sugerencia-id="${sugerenciaId}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+}
+
+export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActivaId, onSugerenciaClick, onTextoChange }) {
   const autosaveTimeoutRef = useRef(null);
   const autosaveForzadoRef = useRef(null);
   const ultimoTextoCargadoRef = useRef(capitulo.texto_actual || '');
@@ -154,7 +167,8 @@ export default function CapituloEditor({ capitulo, sugerencias, onSugerenciaClic
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, sugerencias, capitulo.texto_actual]);
 
-  // Clic en fragmento resaltado → filtrar panel a esa sugerencia
+  // Clic en fragmento resaltado del manuscrito → filtrar panel a esa
+  // sugerencia Y hacer scroll de la página hacia ARRIBA (donde está el panel)
   useEffect(() => {
     if (!editor) return;
 
@@ -163,6 +177,8 @@ export default function CapituloEditor({ capitulo, sugerencias, onSugerenciaClic
       if (targetSug) {
         const id = targetSug.getAttribute('data-sugerencia-id');
         onSugerenciaClick?.(id);
+        // Subir la página hasta arriba para que se vea el panel de notas
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     };
 
@@ -170,6 +186,13 @@ export default function CapituloEditor({ capitulo, sugerencias, onSugerenciaClic
     dom.addEventListener('click', handleClick);
     return () => dom.removeEventListener('click', handleClick);
   }, [editor, onSugerenciaClick]);
+
+  // Cuando se activa una sugerencia (clic en la nota del panel), hacer
+  // scroll en el manuscrito hasta el fragmento resaltado correspondiente
+  useEffect(() => {
+    if (!sugerenciaActivaId) return;
+    scrollHastaMarcaEnTexto(sugerenciaActivaId);
+  }, [sugerenciaActivaId]);
 
   // Cleanup al desmontar
   useEffect(() => {
