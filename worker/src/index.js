@@ -1,3 +1,4 @@
+import express from 'express';
 import { Worker } from 'bullmq';
 import dotenv from 'dotenv';
 
@@ -46,3 +47,29 @@ worker.on('failed', (job, err) => {
 });
 
 console.log(`Worker iniciado con concurrencia ${CONCURRENCY}, esperando trabajos...`);
+
+// ─────────────────────────────────────────────────────────────
+// Servidor HTTP mínimo: necesario para que Render acepte este
+// proceso como "Web Service" (gratis) en vez de "Background Worker"
+// (de pago). También sirve como endpoint de "ping" para mantenerlo
+// despierto desde un servicio externo como cron-job.org.
+// ─────────────────────────────────────────────────────────────
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get('/', (req, res) => {
+  res.json({
+    ok: true,
+    servicio: 'predicas-libro-worker',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ ok: true });
+});
+
+app.listen(PORT, () => {
+  console.log(`Servidor HTTP del worker escuchando en el puerto ${PORT} (solo para health-check)`);
+});
