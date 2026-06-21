@@ -23,16 +23,30 @@ function dormir(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatearTiempoEspera(ms) {
+  const segundos = Math.round(ms / 1000);
+  if (segundos < 60) return `${segundos} segundos`;
+  const minutos = Math.round(segundos / 60);
+  return `${minutos} minuto${minutos === 1 ? '' : 's'}`;
+}
+
 /**
  * Transcribe un archivo de audio usando Groq Whisper.
  * Maneja rate limiting (429) con reintentos y backoff exponencial,
  * respetando el header Retry-After si viene presente.
  *
  * @param {string} filePath - ruta local del archivo de audio (chunk)
+ * @param {string} [capituloId] - usado para reportar estado detallado
+ * @param {Function} [actualizarEstadoDetalle] - callback(capituloId, mensaje)
  * @param {number} maxReintentos
  * @returns {Promise<string>} texto transcrito
  */
-export async function transcribirAudio(filePath, maxReintentos = 5) {
+export async function transcribirAudio(
+  filePath,
+  capituloId = null,
+  actualizarEstadoDetalle = null,
+  maxReintentos = 5
+) {
   if (!GROQ_API_KEY) {
     throw new Error('Falta la variable de entorno GROQ_API_KEY');
   }
@@ -71,7 +85,22 @@ export async function transcribirAudio(filePath, maxReintentos = 5) {
       console.warn(
         `Groq rate limit (429). Reintento ${intento + 1}/${maxReintentos} en ${esperaMs}ms`
       );
+
+      // Reportar al frontend exactamente qué está pasando y cuánto falta
+      if (capituloId && actualizarEstadoDetalle) {
+        const tiempoLegible = formatearTiempoEspera(esperaMs);
+        await actualizarEstadoDetalle(
+          capituloId,
+          `Groq alcanzó su límite de uso gratuito. Esperando ${tiempoLegible} antes de reintentar (intento ${intento + 1}/${maxReintentos})...`
+        );
+      }
+
       await dormir(esperaMs);
+
+      if (capituloId && actualizarEstadoDetalle) {
+        await actualizarEstadoDetalle(capituloId, 'Reintentando transcripción con Groq...');
+      }
+
       continue;
     }
 

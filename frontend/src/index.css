@@ -920,9 +920,10 @@ button { cursor: pointer; font-family: inherit; }
   flex-shrink: 0;
   max-height: none;
   overflow: visible;
-  margin-top: 0;
-  border-top: none;
-  border-radius: 0 0 var(--radius) var(--radius);
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed rgba(201,163,92,0.35);
+  border-radius: var(--radius);
   background-color: var(--cover-deep);
 }
 .marginalia__instructions-title {

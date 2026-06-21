@@ -12,6 +12,17 @@ import { encolarAnalisisIA } from './analisisIA.job.js';
 const BUCKET = 'audios';
 
 /**
+ * Actualiza el mensaje de estado detallado visible en el frontend,
+ * sin tocar el campo "estado" general (pendiente/transcribiendo/etc).
+ */
+export async function actualizarEstadoDetalle(capituloId, mensaje) {
+  await supabase
+    .from('capitulos')
+    .update({ estado_detalle: mensaje })
+    .eq('id', capituloId);
+}
+
+/**
  * Descarga el audio del capítulo desde Supabase Storage a un archivo temporal local.
  */
 async function descargarAudio(audioPath) {
@@ -46,6 +57,8 @@ export async function procesarTranscripcion({ capituloId }) {
   const archivosTemporales = [];
 
   try {
+    await actualizarEstadoDetalle(capituloId, 'Preparando el audio...');
+
     // 1. Obtener datos del capítulo
     const { data: capitulo, error: errorCap } = await supabase
       .from('capitulos')
@@ -62,25 +75,52 @@ export async function procesarTranscripcion({ capituloId }) {
     }
 
     // 2. Descargar audio
+    await actualizarEstadoDetalle(capituloId, 'Descargando el audio original desde el almacenamiento...');
     const audioLocal = await descargarAudio(capitulo.audio_url);
     archivosTemporales.push(audioLocal);
 
     // 3. Convertir y dividir en chunks
+    await actualizarEstadoDetalle(capituloId, 'Convirtiendo el audio a formato comprimido (16kHz mono)...');
     const { chunks, archivoConvertido } = await procesarAudio(audioLocal);
     archivosTemporales.push(archivoConvertido);
     chunks.forEach((c) => archivosTemporales.push(c.path));
 
     console.log(`[transcripcion] ${chunks.length} chunk(s) a transcribir`);
 
+    if (chunks.length > 1) {
+      await actualizarEstadoDetalle(
+        capituloId,
+        `Audio dividido en ${chunks.length} partes (sermón largo). Preparando transcripción...`
+      );
+    } else {
+      await actualizarEstadoDetalle(capituloId, 'Enviando audio a Groq Whisper para transcribir...');
+    }
+
     // 4. Transcribir cada chunk (secuencial para no saturar rate limits de Groq)
     const textosChunks = [];
     for (const chunk of chunks) {
       console.log(`[transcripcion] Transcribiendo chunk ${chunk.index}...`);
-      const texto = await transcribirAudio(chunk.path);
+
+      await actualizarEstadoDetalle(
+        capituloId,
+        chunks.length > 1
+          ? `Transcribiendo audio: parte ${chunk.index + 1} de ${chunks.length} (Groq Whisper)...`
+          : 'Transcribiendo audio con Groq Whisper...'
+      );
+
+      const texto = await transcribirAudio(chunk.path, capituloId, actualizarEstadoDetalle);
       textosChunks.push({ index: chunk.index, texto });
+
+      if (chunks.length > 1) {
+        await actualizarEstadoDetalle(
+          capituloId,
+          `Parte ${chunk.index + 1} de ${chunks.length} transcrita correctamente.`
+        );
+      }
     }
 
     // 5. Unir transcripciones eliminando solapamiento
+    await actualizarEstadoDetalle(capituloId, 'Uniendo las partes transcritas en un solo texto...');
     const textoCompleto = unirTranscripciones(textosChunks);
 
     if (!textoCompleto || !textoCompleto.trim()) {
@@ -94,6 +134,7 @@ export async function procesarTranscripcion({ capituloId }) {
         texto_original: textoCompleto,
         texto_actual: textoCompleto,
         estado: 'analizando',
+        estado_detalle: 'Transcripción completa. Preparando análisis con IA...',
       })
       .eq('id', capituloId);
 
@@ -121,7 +162,11 @@ export async function procesarTranscripcion({ capituloId }) {
 
     await supabase
       .from('capitulos')
-      .update({ estado: 'error', error_detalle: `Transcripción: ${err.message}` })
+      .update({
+        estado: 'error',
+        error_detalle: `Transcripción: ${err.message}`,
+        estado_detalle: null,
+      })
       .eq('id', capituloId);
 
     await supabase

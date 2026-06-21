@@ -24,6 +24,13 @@ export async function encolarAnalisisIA(capituloId) {
 }
 
 /**
+ * Actualiza el mensaje de estado detallado visible en el frontend.
+ */
+async function actualizarEstadoDetalle(capituloId, mensaje) {
+  await supabase.from('capitulos').update({ estado_detalle: mensaje }).eq('id', capituloId);
+}
+
+/**
  * Inserta saltos de párrafo ("\n\n") antes de cada fragmento_inicio indicado
  * por la IA, buscando cada fragmento en orden a partir de la posición del
  * anterior (para evitar coincidencias fuera de orden).
@@ -178,11 +185,16 @@ export async function procesarAnalisisIA({ capituloId, instruccion = null }) {
       throw new Error('El capítulo no tiene texto para analizar');
     }
 
-    // 1. Llamar a la IA
+    if (instruccion) {
+      await actualizarEstadoDetalle(capituloId, 'Procesando tu instrucción con IA...');
+    }
+
+    // 1. Llamar a la IA (le pasamos capituloId para que reporte progreso por chunk)
     const { parrafos, secciones, sugerencias: sugerenciasCrudas } = await analizarTexto(
       capitulo.texto_actual,
       instruccion,
-      esAnalisisInicial
+      esAnalisisInicial,
+      capituloId
     );
 
     let textoTrabajo = capitulo.texto_actual;
@@ -222,6 +234,7 @@ export async function procesarAnalisisIA({ capituloId, instruccion = null }) {
     }
 
     // 4. Procesar y localizar sugerencias normales
+    await actualizarEstadoDetalle(capituloId, 'Guardando las recomendaciones encontradas...');
     const sugerenciasListas = procesarSugerencias(textoTrabajo, sugerenciasCrudas);
 
     if (sugerenciasListas.length > 0) {
@@ -241,8 +254,10 @@ export async function procesarAnalisisIA({ capituloId, instruccion = null }) {
     if (esAnalisisInicial) {
       await supabase
         .from('capitulos')
-        .update({ estado: 'listo' })
+        .update({ estado: 'listo', estado_detalle: null })
         .eq('id', capituloId);
+    } else {
+      await actualizarEstadoDetalle(capituloId, null);
     }
 
     // 6. Marcar trabajo(s) en cola como completados
@@ -260,7 +275,7 @@ export async function procesarAnalisisIA({ capituloId, instruccion = null }) {
     if (esAnalisisInicial) {
       await supabase
         .from('capitulos')
-        .update({ estado: 'error', error_detalle: `Análisis IA: ${err.message}` })
+        .update({ estado: 'error', error_detalle: `Análisis IA: ${err.message}`, estado_detalle: null })
         .eq('id', capituloId);
     }
 

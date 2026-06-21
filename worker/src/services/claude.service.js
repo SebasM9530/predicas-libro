@@ -8,6 +8,7 @@
 
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import { supabase } from './supabase.service.js';
 
 dotenv.config();
 
@@ -32,6 +33,20 @@ const PAUSA_ENTRE_LLAMADAS_MS = 7000;
 
 function dormir(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Actualiza el mensaje de estado detallado visible en el frontend.
+ * No lanza error si falla (no debe tumbar el análisis por un problema
+ * de reporte de progreso).
+ */
+async function actualizarEstadoDetalle(capituloId, mensaje) {
+  if (!capituloId) return;
+  try {
+    await supabase.from('capitulos').update({ estado_detalle: mensaje }).eq('id', capituloId);
+  } catch (err) {
+    console.warn('[ia] No se pudo actualizar estado_detalle:', err.message);
+  }
 }
 
 function limpiarRespuestaJSON(texto) {
@@ -213,8 +228,9 @@ Para "parrafos": identifica los cortes naturales de párrafo en TODO el sermón 
 Las palabras en fragmento_inicio deben ser EXACTAS (carácter por carácter) tal como aparecen en el texto.
 Responde ÚNICAMENTE con el JSON, sin texto extra, sin markdown.`;
 
-async function analizarGlobal(textoCompleto) {
+async function analizarGlobal(textoCompleto, capituloId = null) {
   console.log(`[ia] Análisis global (${textoCompleto.length} chars)`);
+  await actualizarEstadoDetalle(capituloId, 'Analizando el sermón completo: detectando tema, tono y estructura general...');
 
   const response = await openai.chat.completions.create({
     model: MODELO,
@@ -260,8 +276,12 @@ REGLAS CRÍTICAS:
 6. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown.
 7. Si no hay sugerencias útiles: { "sugerencias": [] }`;
 
-async function procesarChunk(chunk, contextoGlobal, totalChunks) {
+async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = null) {
   console.log(`[ia] Chunk ${chunk.index + 1}/${totalChunks} (${chunk.contenido.length} chars)`);
+  await actualizarEstadoDetalle(
+    capituloId,
+    `Generando recomendaciones de redacción: parte ${chunk.index + 1} de ${totalChunks} (GPT-5 mini)...`
+  );
 
   const contextoResumido = `
 CONTEXTO DEL SERMÓN COMPLETO:
@@ -311,8 +331,12 @@ REGLAS:
 5. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown.
 6. Si no hay sugerencias aplicables: { "sugerencias": [] }`;
 
-async function procesarChunkConInstruccion(chunk, instruccion, totalChunks) {
+async function procesarChunkConInstruccion(chunk, instruccion, totalChunks, capituloId = null) {
   console.log(`[ia] Instrucción chunk ${chunk.index + 1}/${totalChunks}`);
+  await actualizarEstadoDetalle(
+    capituloId,
+    `Aplicando tu instrucción: parte ${chunk.index + 1} de ${totalChunks}...`
+  );
 
   const response = await openai.chat.completions.create({
     model: MODELO,
@@ -332,67 +356,15 @@ async function procesarChunkConInstruccion(chunk, instruccion, totalChunks) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Funciones públicas exportadas
+// Versión sin contexto global (para rondas de sugerencias sin análisis previo)
 // ─────────────────────────────────────────────────────────────
 
-export async function analizarEstructura(textoCompleto) {
-  const global = await analizarGlobal(textoCompleto);
-  return {
-    parrafos: Array.isArray(global.parrafos) ? global.parrafos : [],
-    secciones: Array.isArray(global.secciones) ? global.secciones : [],
-  };
-}
+async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
+  await actualizarEstadoDetalle(
+    capituloId,
+    `Generando recomendaciones: parte ${chunk.index + 1} de ${totalChunks}...`
+  );
 
-export async function analizarSugerencias(textoCompleto, instruccion = null) {
-  const chunks = dividirEnChunks(textoCompleto);
-  console.log(`[ia] ${chunks.length} chunks para sugerencias`);
-
-  const todasSugerencias = [];
-
-  for (let i = 0; i < chunks.length; i++) {
-    let sugerenciasChunk;
-
-    if (instruccion) {
-      sugerenciasChunk = await procesarChunkConInstruccion(chunks[i], instruccion, chunks.length);
-    } else {
-      // Solo en el primer chunk hacemos el análisis global (ya fue hecho antes si es inicial)
-      // Aquí solo necesitamos el contexto mínimo — lo pasamos inline en el prompt
-      sugerenciasChunk = await procesarChunkSinContexto(chunks[i], chunks.length);
-    }
-
-    // Validar que fragmento_original exista en el texto completo
-    const validadas = sugerenciasChunk.filter((s) => {
-      const pos = validarFragmento(textoCompleto, s.fragmento_original);
-      if (pos === -1) {
-        console.warn(`[ia] Sugerencia descartada (fragmento no encontrado): "${s.fragmento_original?.slice(0, 60)}"`);
-        return false;
-      }
-      s._posicion = pos;
-      return true;
-    });
-
-    todasSugerencias.push(...validadas);
-    console.log(`[ia] Chunk ${i + 1}: ${validadas.length} sugerencias válidas`);
-
-    // Pausa entre llamadas para respetar 10 RPM
-    if (i < chunks.length - 1) {
-      await dormir(PAUSA_ENTRE_LLAMADAS_MS);
-    }
-  }
-
-  // Deduplicar y ordenar por posición en el texto
-  const deduplicadas = deduplicarSugerencias(todasSugerencias);
-  deduplicadas.sort((a, b) => (a._posicion || 0) - (b._posicion || 0));
-
-  // Limpiar campo auxiliar _posicion antes de devolver
-  deduplicadas.forEach((s) => delete s._posicion);
-
-  console.log(`[ia] Total sugerencias válidas: ${deduplicadas.length}`);
-  return deduplicadas;
-}
-
-// Versión sin contexto global (para rondas de sugerencias sin análisis previo)
-async function procesarChunkSinContexto(chunk, totalChunks) {
   const response = await openai.chat.completions.create({
     model: MODELO,
     max_completion_tokens: 12000,
@@ -411,15 +383,78 @@ async function procesarChunkSinContexto(chunk, totalChunks) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Funciones públicas exportadas
+// ─────────────────────────────────────────────────────────────
+
+export async function analizarEstructura(textoCompleto, capituloId = null) {
+  const global = await analizarGlobal(textoCompleto, capituloId);
+  return {
+    parrafos: Array.isArray(global.parrafos) ? global.parrafos : [],
+    secciones: Array.isArray(global.secciones) ? global.secciones : [],
+  };
+}
+
+export async function analizarSugerencias(textoCompleto, instruccion = null, capituloId = null) {
+  const chunks = dividirEnChunks(textoCompleto);
+  console.log(`[ia] ${chunks.length} chunks para sugerencias`);
+
+  const todasSugerencias = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    let sugerenciasChunk;
+
+    if (instruccion) {
+      sugerenciasChunk = await procesarChunkConInstruccion(chunks[i], instruccion, chunks.length, capituloId);
+    } else {
+      sugerenciasChunk = await procesarChunkSinContexto(chunks[i], chunks.length, capituloId);
+    }
+
+    const validadas = sugerenciasChunk.filter((s) => {
+      const pos = validarFragmento(textoCompleto, s.fragmento_original);
+      if (pos === -1) {
+        console.warn(`[ia] Sugerencia descartada (fragmento no encontrado): "${s.fragmento_original?.slice(0, 60)}"`);
+        return false;
+      }
+      s._posicion = pos;
+      return true;
+    });
+
+    todasSugerencias.push(...validadas);
+    console.log(`[ia] Chunk ${i + 1}: ${validadas.length} sugerencias válidas`);
+
+    await actualizarEstadoDetalle(
+      capituloId,
+      `Parte ${i + 1} de ${chunks.length} analizada (${validadas.length} recomendaciones encontradas)...`
+    );
+
+    if (i < chunks.length - 1) {
+      await dormir(PAUSA_ENTRE_LLAMADAS_MS);
+    }
+  }
+
+  const deduplicadas = deduplicarSugerencias(todasSugerencias);
+  deduplicadas.sort((a, b) => (a._posicion || 0) - (b._posicion || 0));
+  deduplicadas.forEach((s) => delete s._posicion);
+
+  console.log(`[ia] Total sugerencias válidas: ${deduplicadas.length}`);
+  return deduplicadas;
+}
+
+// ─────────────────────────────────────────────────────────────
 // Función combinada — usada por analisisIA.job.js (mantiene firma)
 // ─────────────────────────────────────────────────────────────
 
-export async function analizarTexto(textoCompleto, instruccionAdicional = null, esAnalisisInicial = true) {
+export async function analizarTexto(textoCompleto, instruccionAdicional = null, esAnalisisInicial = true, capituloId = null) {
   if (esAnalisisInicial) {
     // 1. Análisis global liviano (párrafos + secciones + contexto)
-    const global = await analizarGlobal(textoCompleto);
+    const global = await analizarGlobal(textoCompleto, capituloId);
     const parrafos = Array.isArray(global.parrafos) ? global.parrafos : [];
     const secciones = Array.isArray(global.secciones) ? global.secciones : [];
+
+    await actualizarEstadoDetalle(
+      capituloId,
+      `Análisis general listo (${secciones.length} sección(es) detectadas). Iniciando revisión de redacción...`
+    );
 
     await dormir(PAUSA_ENTRE_LLAMADAS_MS);
 
@@ -430,7 +465,7 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
     const todasSugerencias = [];
 
     for (let i = 0; i < chunks.length; i++) {
-      const sugerenciasChunk = await procesarChunk(chunks[i], global, chunks.length);
+      const sugerenciasChunk = await procesarChunk(chunks[i], global, chunks.length, capituloId);
 
       const validadas = sugerenciasChunk.filter((s) => {
         const pos = validarFragmento(textoCompleto, s.fragmento_original);
@@ -445,6 +480,11 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
       todasSugerencias.push(...validadas);
       console.log(`[ia] Chunk ${i + 1}/${chunks.length}: ${validadas.length} sugerencias válidas`);
 
+      await actualizarEstadoDetalle(
+        capituloId,
+        `Redacción revisada: parte ${i + 1} de ${chunks.length} completada (${todasSugerencias.length} recomendaciones hasta ahora)...`
+      );
+
       if (i < chunks.length - 1) {
         await dormir(PAUSA_ENTRE_LLAMADAS_MS);
       }
@@ -456,6 +496,8 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
 
     console.log(`[ia] Análisis completo: ${parrafos.length} párrafos, ${secciones.length} secciones, ${deduplicadas.length} sugerencias`);
 
+    await actualizarEstadoDetalle(capituloId, 'Análisis con IA completado. Preparando resultados...');
+
     return { parrafos, secciones, sugerencias: deduplicadas };
   }
 
@@ -464,7 +506,7 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
   const todasSugerencias = [];
 
   for (let i = 0; i < chunks.length; i++) {
-    const sug = await procesarChunkConInstruccion(chunks[i], instruccionAdicional, chunks.length);
+    const sug = await procesarChunkConInstruccion(chunks[i], instruccionAdicional, chunks.length, capituloId);
 
     const validadas = sug.filter((s) => {
       const pos = validarFragmento(textoCompleto, s.fragmento_original);
