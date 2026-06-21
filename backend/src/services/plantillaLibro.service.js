@@ -68,12 +68,6 @@ export function generarHtmlLibro({ capitulos, config }) {
     margin-bottom: ${margenes.bottom};
     margin-left: ${margenes.left};
     margin-right: ${margenes.right};
-    @bottom-center {
-      content: counter(page);
-      font-family: 'Times New Roman', Times, serif;
-      font-size: 9pt;
-      color: #000000;
-    }
   }
 
   * {

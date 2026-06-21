@@ -86,7 +86,6 @@ export async function transcribirAudio(
         `Groq rate limit (429). Reintento ${intento + 1}/${maxReintentos} en ${esperaMs}ms`
       );
 
-      // Reportar al frontend exactamente qué está pasando y cuánto falta
       if (capituloId && actualizarEstadoDetalle) {
         const tiempoLegible = formatearTiempoEspera(esperaMs);
         await actualizarEstadoDetalle(
@@ -104,7 +103,6 @@ export async function transcribirAudio(
       continue;
     }
 
-    // Otros errores HTTP: lanzar con detalle
     const textoError = await response.text();
     throw new Error(`Groq error ${response.status}: ${textoError}`);
   }
