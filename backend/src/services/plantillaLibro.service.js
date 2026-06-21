@@ -1,17 +1,27 @@
 /**
- * Genera el HTML completo del libro con las especificaciones definitivas:
- * - Fuente: Times New Roman
- * - Interlineado: 1.15
- * - Justificado
- * - Color texto: negro
- * - Márgenes moderados: Sup/Inf 2.54cm, Izq/Der 1.91cm
- * - Título capítulo: 16pt
- * - Subtítulo: 14pt
- * - Texto cuerpo: 12pt
- * - Índice con hipervínculos a cada capítulo
- * - Numeración de páginas en pie de página
+ * Genera el HTML completo del libro con las especificaciones definitivas
+ * (Times New Roman, interlineado 1.15, justificado, márgenes moderados,
+ * índice con anclas para hipervínculos, y numeración de página vía
+ * contador CSS nativo @page — más confiable que el header/footer de
+ * Puppeteer, que @sparticuz/chromium no soporta correctamente).
  */
 export function generarHtmlLibro({ capitulos, config }) {
+  const estilos = config.config_estilos || {};
+
+  const fuenteTitulo = estilos.fuente_titulo || "'Times New Roman', Times, serif";
+  const fuenteCuerpo = estilos.fuente_cuerpo || "'Times New Roman', Times, serif";
+  const tamanoTituloCapitulo = estilos.tamano_titulo_capitulo || '16pt';
+  const tamanoCuerpo = estilos.tamano_cuerpo || '12pt';
+  const colorTitulo = estilos.color_titulo || '#000000';
+  const alineacionCuerpo = estilos.alineacion_cuerpo || 'justify';
+
+  const margenes = estilos.margenes || {
+    top: '2.54cm',
+    bottom: '2.54cm',
+    left: '1.91cm',
+    right: '1.91cm',
+  };
+
   // Generar IDs únicos para cada capítulo (para los hipervínculos del índice)
   const capitulosConId = capitulos.map((cap, i) => ({
     ...cap,
@@ -47,16 +57,24 @@ export function generarHtmlLibro({ capitulos, config }) {
 <head>
 <meta charset="UTF-8" />
 <style>
-  /* ── Márgenes moderados: Sup/Inf 2.54cm, Izq/Der 1.91cm ── */
+  /* ── Numeración de página vía contador CSS nativo ──
+     Más confiable que el header/footer de Puppeteer, que
+     @sparticuz/chromium (versión "lite" de Chromium) no
+     siempre soporta correctamente. Solo número actual,
+     sin total (evita el bug de TOTAL_PAGES roto con
+     documentos largos de múltiples capítulos). */
   @page {
-    margin-top: 2.54cm;
-    margin-bottom: 2.54cm;
-    margin-left: 1.91cm;
-    margin-right: 1.91cm;
+    margin-top: ${margenes.top};
+    margin-bottom: ${margenes.bottom};
+    margin-left: ${margenes.left};
+    margin-right: ${margenes.right};
+    @bottom-center {
+      content: counter(page);
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 9pt;
+      color: #000000;
+    }
   }
-
-  /* ── Fuente y tipografía base ── */
-  @import url('https://fonts.cdnfonts.com/css/times-new-roman');
 
   * {
     box-sizing: border-box;
@@ -65,8 +83,8 @@ export function generarHtmlLibro({ capitulos, config }) {
   }
 
   body {
-    font-family: 'Times New Roman', Times, serif;
-    font-size: 12pt;
+    font-family: ${fuenteCuerpo};
+    font-size: ${tamanoCuerpo};
     color: #000000;
     line-height: 1.15;
     text-align: justify;
@@ -84,10 +102,10 @@ export function generarHtmlLibro({ capitulos, config }) {
   }
 
   .portada h1 {
-    font-family: 'Times New Roman', Times, serif;
+    font-family: ${fuenteTitulo};
     font-size: 24pt;
     font-weight: bold;
-    color: #000000;
+    color: ${colorTitulo};
     margin-bottom: 16pt;
     line-height: 1.15;
   }
@@ -112,10 +130,10 @@ export function generarHtmlLibro({ capitulos, config }) {
   }
 
   .indice h2 {
-    font-family: 'Times New Roman', Times, serif;
+    font-family: ${fuenteTitulo};
     font-size: 16pt;
     font-weight: bold;
-    color: #000000;
+    color: ${colorTitulo};
     margin-bottom: 16pt;
     line-height: 1.15;
   }
@@ -143,7 +161,6 @@ export function generarHtmlLibro({ capitulos, config }) {
     text-decoration: underline;
   }
 
-  /* Línea punteada entre título y fecha en el índice */
   .indice li::after {
     content: '';
     flex: 1;
@@ -165,10 +182,10 @@ export function generarHtmlLibro({ capitulos, config }) {
   }
 
   .capitulo h2 {
-    font-family: 'Times New Roman', Times, serif;
-    font-size: 16pt;
+    font-family: ${fuenteTitulo};
+    font-size: ${tamanoTituloCapitulo};
     font-weight: bold;
-    color: #000000;
+    color: ${colorTitulo};
     margin-bottom: 4pt;
     line-height: 1.15;
   }
@@ -182,26 +199,22 @@ export function generarHtmlLibro({ capitulos, config }) {
   }
 
   .capitulo p {
-    font-size: 12pt;
-    text-align: justify;
+    font-size: ${tamanoCuerpo};
+    text-align: ${alineacionCuerpo};
     margin-bottom: 10pt;
     line-height: 1.15;
     color: #000000;
   }
-
-  /* ── Numeración de páginas (Puppeteer la inyecta en el footer) ── */
 </style>
 </head>
 <body>
 
-  <!-- Portada -->
   <div class="portada">
     <h1>${escapeHtml(config.titulo_libro || 'Prédicas')}</h1>
     ${config.subtitulo ? `<p class="subtitulo">${escapeHtml(config.subtitulo)}</p>` : ''}
     ${config.autor ? `<p class="autor">${escapeHtml(config.autor)}</p>` : ''}
   </div>
 
-  <!-- Índice con hipervínculos -->
   <div class="indice">
     <h2>Índice</h2>
     <ul>
@@ -209,7 +222,6 @@ export function generarHtmlLibro({ capitulos, config }) {
     </ul>
   </div>
 
-  <!-- Capítulos -->
   ${capitulosHtml}
 
 </body>

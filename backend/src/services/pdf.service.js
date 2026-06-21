@@ -52,15 +52,8 @@ export async function generarPdfLibro({ capitulos, config }) {
     const pdfUint8Array = await page.pdf({
       format: 'A4',
       printBackground: true,
-      displayHeaderFooter: true,
-      headerTemplate: '<span></span>',
-      footerTemplate: FOOTER_TEMPLATE,
-      margin: {
-        top: '2.54cm',
-        bottom: '2.54cm',
-        left: '1.91cm',
-        right: '1.91cm',
-      },
+      // Márgenes y numeración ya van definidos en el CSS @page de la
+      // plantilla HTML (más confiable que el header/footer de Puppeteer)
     });
 
     return Buffer.from(pdfUint8Array);
