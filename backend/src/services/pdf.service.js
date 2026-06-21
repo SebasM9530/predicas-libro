@@ -1,24 +1,30 @@
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 import { generarHtmlLibro } from './plantillaLibro.service.js';
 
 let browserInstance = null;
 
 /**
- * Reutiliza una instancia del navegador headless entre llamadas, pero
- * la relanza si se desconectó (evita PDFs corruptos/vacíos tras un crash).
+ * Usa @sparticuz/chromium: una versión de Chromium empaquetada como
+ * dependencia npm, diseñada para entornos restringidos (Render,
+ * Lambda, etc.) que no dependen de una descarga separada de Chrome
+ * durante el build (la cual no persiste de forma confiable en runtime
+ * en el plan gratuito de Render).
  */
 async function obtenerBrowser() {
   if (!browserInstance || !browserInstance.isConnected()) {
     browserInstance = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
     });
   }
   return browserInstance;
 }
 
 const FOOTER_TEMPLATE = `
-<div style="width:100%; font-size:9pt; font-family:'Times New Roman',Times,serif; color:#000000; text-align:center; padding-top:4px;">
+<div style="width: 100%; font-size: 9px; font-family: 'Times New Roman', Times, serif; color: #000000; text-align: center; padding-top: 4px;">
   <span class="pageNumber"></span> / <span class="totalPages"></span>
 </div>
 `;
@@ -32,13 +38,6 @@ const FOOTER_TEMPLATE = `
  */
 export async function generarPdfLibro({ capitulos, config }) {
   const html = generarHtmlLibro({ capitulos, config });
-  const estilos = config.config_estilos || {};
-  const margenes = estilos.margenes || {
-    top: '2cm',
-    bottom: '2cm',
-    left: '2.5cm',
-    right: '2cm',
-  };
 
   const browser = await obtenerBrowser();
   const page = await browser.newPage();
