@@ -7,6 +7,20 @@ import { actualizarTextoCapitulo } from '../../services/api';
 const AUTOSAVE_DEBOUNCE_MS = 3000;
 const AUTOSAVE_FORZADO_MS = 30000;
 
+/**
+ * Normaliza espacios en blanco de la misma forma en que Tiptap los
+ * normaliza internamente al renderizar HTML: colapsa espacios/tabs
+ * múltiples a uno solo y quita saltos de línea sueltos dentro de un
+ * párrafo. Aplicar esta MISMA normalización tanto al texto guardado
+ * en BD como al fragmento_original de cada sugerencia antes de
+ * buscarlo evita que pequeñas diferencias de espacios rompan el
+ * resaltado.
+ */
+function normalizarEspacios(texto) {
+  if (!texto) return '';
+  return texto.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+}
+
 function mapearPosicionTexto(editor, desde, hasta) {
   let acumulado = 0;
   let from = null;
@@ -38,6 +52,53 @@ function mapearPosicionTexto(editor, desde, hasta) {
   return { from, to };
 }
 
+/**
+ * Busca fragmento dentro de textoPlano. Primero intenta una búsqueda
+ * exacta; si falla, reintenta con ambos textos normalizados (espacios
+ * colapsados), mapeando el índice encontrado de vuelta a la posición
+ * real en textoPlano (sin normalizar) para que mapearPosicionTexto
+ * siga funcionando correctamente con el documento real de Tiptap.
+ */
+function buscarFragmentoTolerante(textoPlano, fragmento) {
+  if (!fragmento) return -1;
+
+  // 1. Intento exacto
+  let idx = textoPlano.indexOf(fragmento);
+  if (idx !== -1) return idx;
+
+  // 2. Intento normalizando espacios en el fragmento buscado, pero
+  // todavía buscando dentro del texto plano SIN normalizar (cubre el
+  // caso de espacios dobles o tabs distintos dentro del fragmento)
+  const fragmentoNormalizado = fragmento.replace(/\s+/g, ' ').trim();
+  const textoColapsado = textoPlano.replace(/\s+/g, ' ');
+  const idxColapsado = textoColapsado.indexOf(fragmentoNormalizado);
+
+  if (idxColapsado === -1) return -1;
+
+  // Mapear la posición encontrada en el texto colapsado de vuelta a
+  // la posición real en textoPlano, contando caracteres reales
+  // mientras avanzamos en paralelo por ambas cadenas.
+  let posReal = 0;
+  let posColapsada = 0;
+
+  while (posColapsada < idxColapsado && posReal < textoPlano.length) {
+    const esEspacio = /\s/.test(textoPlano[posReal]);
+    if (esEspacio) {
+      // Saltar todos los espacios consecutivos en el texto real,
+      // cuentan como un solo espacio en el colapsado
+      while (posReal < textoPlano.length && /\s/.test(textoPlano[posReal])) {
+        posReal++;
+      }
+      posColapsada++;
+    } else {
+      posReal++;
+      posColapsada++;
+    }
+  }
+
+  return posReal;
+}
+
 function aplicarMarcas(editor, sugerencias) {
   if (!editor) return;
 
@@ -51,11 +112,25 @@ function aplicarMarcas(editor, sugerencias) {
     if (sug.tipo === 'marcador_seccion') continue;
     if (!sug.fragmento_original) continue;
 
-    const idx = textoPlano.indexOf(sug.fragmento_original);
-    if (idx === -1) continue;
+    const idx = buscarFragmentoTolerante(textoPlano, sug.fragmento_original);
+
+    if (idx === -1) {
+      console.warn(
+        '[editor] No se pudo resaltar una sugerencia: el fragmento no se encontró en el texto actual.',
+        { id: sug.id, tipo: sug.tipo, fragmento: sug.fragmento_original }
+      );
+      continue;
+    }
 
     const { from, to } = mapearPosicionTexto(editor, idx, idx + sug.fragmento_original.length);
-    if (from == null || to == null) continue;
+
+    if (from == null || to == null) {
+      console.warn(
+        '[editor] El fragmento se localizó en el texto pero no se pudo mapear a una posición del editor.',
+        { id: sug.id, tipo: sug.tipo, fragmento: sug.fragmento_original }
+      );
+      continue;
+    }
 
     editor
       .chain()
@@ -69,7 +144,7 @@ function aplicarMarcas(editor, sugerencias) {
     if (sec.tipo !== 'marcador_seccion') continue;
     if (!sec.fragmento_original) continue;
 
-    const idx = textoPlano.indexOf(sec.fragmento_original);
+    const idx = buscarFragmentoTolerante(textoPlano, sec.fragmento_original);
     if (idx === -1) continue;
 
     const primerasPalabras = sec.fragmento_original.split(/\s+/).slice(0, 2).join(' ');
@@ -213,7 +288,7 @@ function textoAHtml(texto) {
   if (!texto) return '<p></p>';
   return texto
     .split(/\n\n+/)
-    .map((parrafo) => `<p>${escapeHtml(parrafo.trim())}</p>`)
+    .map((parrafo) => `<p>${escapeHtml(normalizarEspacios(parrafo))}</p>`)
     .join('');
 }
 

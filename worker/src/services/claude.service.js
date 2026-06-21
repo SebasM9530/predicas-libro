@@ -22,7 +22,7 @@ const MODELO = 'gpt-5-mini';
 // ~8000 chars ≈ ~2000 tokens de input por chunk
 // Con system prompt (~800 tokens) + chunk (~2000) + output (~8000) = ~10800 tokens
 // Bien dentro del límite de 60k TPM incluso con chunks consecutivos
-const CHUNK_CHARS = 8000;
+const CHUNK_CHARS = 6000;
 
 // Pausa entre llamadas para respetar 10 RPM (1 llamada cada 6 segundos mínimo)
 const PAUSA_ENTRE_LLAMADAS_MS = 7000;
@@ -256,25 +256,38 @@ const SYSTEM_PROMPT_CHUNK = `Eres un asistente editorial especializado en transf
 
 Recibes un FRAGMENTO del sermón junto con contexto global del sermón completo.
 
-Tu trabajo: generar sugerencias de mejora SOLO para este fragmento, cubriéndolo de principio a fin.
+Tu trabajo: generar sugerencias de mejora SOLO para este fragmento, cubriéndolo de principio a fin, aplicando los siguientes criterios editoriales:
 
-TIPOS DE CAMBIOS:
-- "mejorar_redaccion": transforma frases orales en prosa escrita. MÁS IMPORTANTE — úsalo generosamente.
-- "eliminar_muletilla": elimina "eh", "o sea", "como les digo", "verdad", "¿no?" repetidos.
-- "eliminar_redundancia": elimina ideas repetidas innecesariamente por escrito.
-- "ampliar": completa ideas que quedaron muy cortadas.
-- "eliminar_opinion_personal": marca comentarios tangenciales (nunca se aplica automáticamente).
-- "corregir_transcripcion": corrige palabras/frases sin sentido por error de Whisper. Incluye TODAS las que encuentres.
-- "mejorar_transicion": mejora conectores abruptos entre ideas.
+TIPOS DE CAMBIOS Y CRITERIOS DETALLADOS:
+
+- "mejorar_redaccion": transforma frases orales en prosa escrita. Esta es la categoría más amplia e incluye:
+  1. Preguntas retóricas: identifica todas las del fragmento y mejora su redacción para que resulten más claras e impactantes en formato de libro, sin cambiar su intención.
+  2. Expresiones demasiado informales o coloquiales: propón una versión más apropiada para un libro, manteniendo la voz cercana del pastor.
+  3. Frases que se entienden al escucharlas pero resultan ambiguas o confusas al leerlas: reescríbelas para que sean claras en formato de libro.
+  4. Cambios innecesarios entre primera persona singular, primera persona plural y segunda persona: propón una voz narrativa más consistente.
+  5. Puntuación y construcción de frases: corrige cuando sea necesario para que la oración sea correcta, sin cambiar ideas, ejemplos ni vocabulario salvo que sea imprescindible.
+
+- "mejorar_transicion": revisa ÚNICAMENTE los conectores entre párrafos e ideas. Sugiere cambios donde la transición sea abrupta, confusa o inexistente.
+
+- "eliminar_opinion_personal": identifica comentarios personales, anécdotas o apartes que interrumpan el tema principal. Sugiere eliminarlos o integrarlos mejor al argumento. También incluye saludos, agradecimientos, anuncios o instrucciones propias del culto que no deban aparecer en el capítulo final (sugiere eliminarlos manteniendo la continuidad).
+
+- "eliminar_muletilla": elimina "eh", "o sea", "como les digo", "verdad", "¿no?" repetidos en exceso. También incluye llamados a la audiencia propios de una prédica oral en vivo, como "dígale al que está a su lado", "levante la mano" o "repita conmigo" — propón una adaptación adecuada para un capítulo de libro (puede ser reformular como afirmación o eliminar si no aporta al texto escrito).
+
+- "eliminar_redundancia": elimina ideas repetidas innecesariamente por escrito. Incluye específicamente cuando el pastor repite la misma enseñanza usando palabras diferentes — conserva la versión más clara y propón una redacción unificada.
+
+- "ampliar": identifica ideas que comienzan pero no terminan de desarrollarse. Propón una frase breve de cierre, SIN agregar enseñanzas nuevas que no estén respaldadas por el sermón.
+
+- "corregir_transcripcion": revisa todas las referencias bíblicas, nombres bíblicos y términos cristianos. Corrige ÚNICAMENTE aquellos que parezcan errores de transcripción (palabras inventadas, nombres deformados, frases incoherentes por error de Whisper).
 
 REGLAS CRÍTICAS:
 1. "fragmento_original": copia texto EXACTO del fragmento (carácter por carácter). Máximo 35 palabras pero suficiente para ser único.
 2. "fragmento_nuevo": texto propuesto. Máximo 80 palabras. Si necesitas más, escribe las primeras 80 palabras + "...".
-3. "problema": máximo 12 palabras.
+3. "problema": máximo 12 palabras, indicando claramente cuál de los criterios aplicaste (ej. "pregunta retórica poco clara", "oración demasiado larga", "llamado oral de culto").
 4. Cubre TODO el fragmento de inicio a fin. No te detengas a mitad.
 5. No inventes fragmentos. No parafrasees fragmento_original.
-6. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown.
-7. Si no hay sugerencias útiles: { "sugerencias": [] }`;
+6. Nunca cambies el mensaje, la enseñanza ni la intención del pastor — solo la forma en que está expresado.
+7. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown.
+8. Si no hay sugerencias útiles: { "sugerencias": [] }`;
 
 async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = null) {
   console.log(`[ia] Chunk ${chunk.index + 1}/${totalChunks} (${chunk.contenido.length} chars)`);

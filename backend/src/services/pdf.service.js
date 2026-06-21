@@ -23,15 +23,19 @@ async function obtenerBrowser() {
   return browserInstance;
 }
 
+// Pie de página: SOLO número de página actual (sin total), para
+// evitar que se rompa con documentos largos de múltiples capítulos.
+// Puppeteer expone la clase CSS "pageNumber" automáticamente cuando
+// displayHeaderFooter está activo; "totalPages" se omite a propósito.
 const FOOTER_TEMPLATE = `
-<div style="width: 100%; font-size: 9px; font-family: 'Times New Roman', Times, serif; color: #000000; text-align: center; padding-top: 4px;">
-  <span class="pageNumber"></span> / <span class="totalPages"></span>
+<div style="width:100%; font-size:9pt; font-family:'Times New Roman',Times,serif; color:#000000; text-align:center; padding-top:4px;">
+  <span class="pageNumber"></span>
 </div>
 `;
 
 /**
  * Genera el PDF del libro a partir de los capítulos y configuración.
- * Incluye numeración de páginas obligatoria (pie de página).
+ * Incluye numeración de página actual (sin total) en el pie de página.
  *
  * @param {{ capitulos: Array, config: object }} datos
  * @returns {Promise<Buffer>}

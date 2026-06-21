@@ -7,12 +7,9 @@ import {
   PageBreak,
   Footer,
   PageNumber,
-  ExternalHyperlink,
   InternalHyperlink,
   BookmarkStart,
   BookmarkEnd,
-  HeadingLevel,
-  LevelFormat,
 } from 'docx';
 
 /**
@@ -26,15 +23,11 @@ import {
  * - Subtítulo índice: 14pt (28 half-points)
  * - Texto cuerpo: 12pt (24 half-points)
  * - Índice con hipervínculos internos a cada capítulo
- * - Numeración de páginas en pie de página
+ * - Pie de página: SOLO número de página actual (sin total, para evitar
+ *   que se rompa el cálculo de TOTAL_PAGES con documentos largos de
+ *   múltiples capítulos)
  */
 export async function generarWordLibro({ capitulos, config }) {
-
-  // Conversiones:
-  // 1 pt = 20 twips | 1 cm = 567 twips
-  // Márgenes moderados: 2.54cm = 1440 twips | 1.91cm = 1080 twips
-  // Interlineado 1.15: en docx se expresa en twips = 1.15 * 240 = 276
-
   const FUENTE = 'Times New Roman';
   const TAMANO_CUERPO = 24;        // 12pt en half-points
   const TAMANO_SUBTITULO = 28;     // 14pt
@@ -43,7 +36,8 @@ export async function generarWordLibro({ capitulos, config }) {
   const INTERLINEADO = 276;        // 1.15 en twips (1.15 × 240)
   const COLOR_NEGRO = '000000';
 
-  const MARGENES = {
+  const estilos = config.config_estilos || {};
+  const MARGENES = estilos.margenes || {
     top: 1440,    // 2.54 cm
     bottom: 1440, // 2.54 cm
     left: 1080,   // 1.91 cm
@@ -256,7 +250,9 @@ export async function generarWordLibro({ capitulos, config }) {
     }
   });
 
-  // ── Pie de página con numeración ─────────────────────────
+  // ── Pie de página: SOLO número de página actual ──────────
+  // (sin TOTAL_PAGES, que es lo que se rompía con documentos
+  // largos de múltiples capítulos)
   const footer = new Footer({
     children: [
       new Paragraph({
@@ -264,7 +260,7 @@ export async function generarWordLibro({ capitulos, config }) {
         spacing: { line: INTERLINEADO, lineRule: 'exact' },
         children: [
           new TextRun({
-            children: [PageNumber.CURRENT, ' / ', PageNumber.TOTAL_PAGES],
+            children: [PageNumber.CURRENT],
             font: FUENTE,
             size: 18, // 9pt
             color: COLOR_NEGRO,
