@@ -297,4 +297,4 @@ function escapeHtml(texto) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-}
+} 
