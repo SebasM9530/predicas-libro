@@ -57,50 +57,94 @@ function limpiarRespuestaJSON(texto) {
 }
 
 function repararJSONTruncado(jsonTexto) {
-  // Busca el último objeto completo dentro de un array
-  let mejorCorte = -1;
+  if (!jsonTexto) return null;
 
+  // Buscamos, de atrás hacia adelante, el último punto donde el JSON
+  // parcial es válido si simplemente cerramos todo lo que esté abierto
+  // en ese momento (arrays, objetos, y un string sin cerrar si aplica).
   for (let i = jsonTexto.length - 1; i >= 0; i--) {
-    if (jsonTexto[i] !== '}') continue;
-
     const candidato = jsonTexto.slice(0, i + 1);
-    let balanceLlaves = 0;
-    let balanceCorchetes = 0;
-    let dentroString = false;
-    let escape = false;
 
-    for (const ch of candidato) {
-      if (escape) { escape = false; continue; }
-      if (ch === '\\') { escape = true; continue; }
-      if (ch === '"') { dentroString = !dentroString; continue; }
-      if (dentroString) continue;
-      if (ch === '{') balanceLlaves++;
-      else if (ch === '}') balanceLlaves--;
-      else if (ch === '[') balanceCorchetes++;
-      else if (ch === ']') balanceCorchetes--;
-    }
+    // Solo probamos cortes justo después de ',', '}', ']', '"' — son
+    // los puntos donde un elemento termina limpiamente.
+    const ultimoChar = candidato[candidato.length - 1];
+    if (!['}', ']', ',', '"'].includes(ultimoChar)) continue;
 
-    // Estamos justo después de cerrar un elemento de array dentro del objeto raíz
-    if (balanceLlaves === 1 && balanceCorchetes === 1) {
-      mejorCorte = i + 1;
-      break;
+    const cierre = construirCierre(candidato);
+    if (cierre === null) continue;
+
+    // Si terminamos en coma, la quitamos antes de cerrar (coma colgante inválida)
+    let base = candidato;
+    if (ultimoChar === ',') base = base.slice(0, -1);
+
+    try {
+      const resultado = JSON.parse(base + cierre);
+      if (resultado && typeof resultado === 'object') return resultado;
+    } catch {
+      continue;
     }
   }
 
-  if (mejorCorte === -1) return null;
+  return null;
+}
 
-  try {
-    return JSON.parse(jsonTexto.slice(0, mejorCorte) + ']}');
-  } catch {
-    return null;
+/**
+ * Recorre el texto y determina qué llaves/corchetes/strings quedaron
+ * abiertos, devolviendo el string necesario para cerrarlos en orden
+ * inverso (LIFO). Devuelve null si el texto tiene una estructura
+ * inválida que no se puede determinar con seguridad.
+ */
+function construirCierre(texto) {
+  const pila = [];
+  let dentroString = false;
+  let escape = false;
+
+  for (const ch of texto) {
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (ch === '"') { dentroString = !dentroString; continue; }
+    if (dentroString) continue;
+
+    if (ch === '{') pila.push('}');
+    else if (ch === '[') pila.push(']');
+    else if (ch === '}' || ch === ']') {
+      if (pila.length === 0) return null; // cierre sin apertura: inválido
+      pila.pop();
+    }
   }
+
+  // Si terminamos a mitad de un string, hay que cerrarlo primero
+  const prefijo = dentroString ? '"' : '';
+
+  return prefijo + pila.reverse().join('');
 }
 
 function parsearJSON(texto, contexto) {
   const jsonLimpio = limpiarRespuestaJSON(texto);
 
   if (!jsonLimpio) {
-    console.warn(`[ia] Respuesta vacía en "${contexto}", devolviendo objeto vacío`);
+    console.warn(`[ia] Respuesta vacía en "${contexto}" (probablemente se cortó por límite de tokens). Intentando recuperar lo posible...`);
+
+    // Incluso con jsonLimpio vacío, intentamos reparar sobre el texto
+    // crudo original (sin limpiar) por si el corte ocurrió de forma
+    // que limpiarRespuestaJSON dejó la cadena vacía.
+    const reparadoDesdeOriginal = repararJSONTruncado(texto.trim());
+    if (reparadoDesdeOriginal && Object.keys(reparadoDesdeOriginal).length > 0) {
+      console.warn(`[ia] Se recuperaron datos parciales para "${contexto}" desde una respuesta truncada.`);
+      return reparadoDesdeOriginal;
+    }
+
+    if (contexto === 'global') {
+      return {
+        tema_central: 'No disponible',
+        tono: 'No disponible',
+        resumen: 'No disponible',
+        terminos_clave: [],
+        secciones: [],
+        parrafos: [],
+        instrucciones_editoriales: 'Mantener la voz del pastor',
+      };
+    }
     return {};
   }
 
@@ -115,8 +159,6 @@ function parsearJSON(texto, contexto) {
       return reparado;
     }
 
-    // Si el reparador no funciona, intentar extraer lo que sea válido
-    // para el análisis global: devolver estructura mínima usable
     if (contexto === 'global') {
       console.warn(`[ia] No se pudo reparar "${contexto}", devolviendo estructura mínima`);
       return {
@@ -234,7 +276,7 @@ async function analizarGlobal(textoCompleto, capituloId = null) {
 
   const response = await openai.chat.completions.create({
     model: MODELO,
-    max_completion_tokens: 16000,
+    max_completion_tokens: 24000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_GLOBAL },
       { role: 'user', content: `Analiza este sermón completo:\n\n${textoCompleto}` },
