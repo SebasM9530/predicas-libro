@@ -17,14 +17,7 @@ const openai = new OpenAI({
 });
 
 const MODELO = 'gpt-5-mini';
-
-// Tamaño de cada chunk en caracteres
-// ~8000 chars ≈ ~2000 tokens de input por chunk
-// Con system prompt (~800 tokens) + chunk (~2000) + output (~8000) = ~10800 tokens
-// Bien dentro del límite de 60k TPM incluso con chunks consecutivos
 const CHUNK_CHARS = 6000;
-
-// Pausa entre llamadas para respetar 10 RPM (1 llamada cada 6 segundos mínimo)
 const PAUSA_ENTRE_LLAMADAS_MS = 7000;
 
 // ─────────────────────────────────────────────────────────────
@@ -35,11 +28,6 @@ function dormir(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Actualiza el mensaje de estado detallado visible en el frontend.
- * No lanza error si falla (no debe tumbar el análisis por un problema
- * de reporte de progreso).
- */
 async function actualizarEstadoDetalle(capituloId, mensaje) {
   if (!capituloId) return;
   try {
@@ -54,38 +42,6 @@ function limpiarRespuestaJSON(texto) {
   limpio = limpio.replace(/^```json\s*/i, '').replace(/^```\s*/, '');
   limpio = limpio.replace(/```\s*$/, '');
   return limpio.trim();
-}
-
-function repararJSONTruncado(jsonTexto) {
-  if (!jsonTexto) return null;
-
-  // Buscamos, de atrás hacia adelante, el último punto donde el JSON
-  // parcial es válido si simplemente cerramos todo lo que esté abierto
-  // en ese momento (arrays, objetos, y un string sin cerrar si aplica).
-  for (let i = jsonTexto.length - 1; i >= 0; i--) {
-    const candidato = jsonTexto.slice(0, i + 1);
-
-    // Solo probamos cortes justo después de ',', '}', ']', '"' — son
-    // los puntos donde un elemento termina limpiamente.
-    const ultimoChar = candidato[candidato.length - 1];
-    if (!['}', ']', ',', '"'].includes(ultimoChar)) continue;
-
-    const cierre = construirCierre(candidato);
-    if (cierre === null) continue;
-
-    // Si terminamos en coma, la quitamos antes de cerrar (coma colgante inválida)
-    let base = candidato;
-    if (ultimoChar === ',') base = base.slice(0, -1);
-
-    try {
-      const resultado = JSON.parse(base + cierre);
-      if (resultado && typeof resultado === 'object') return resultado;
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
 }
 
 /**
@@ -108,32 +64,50 @@ function construirCierre(texto) {
     if (ch === '{') pila.push('}');
     else if (ch === '[') pila.push(']');
     else if (ch === '}' || ch === ']') {
-      if (pila.length === 0) return null; // cierre sin apertura: inválido
+      if (pila.length === 0) return null;
       pila.pop();
     }
   }
 
-  // Si terminamos a mitad de un string, hay que cerrarlo primero
   const prefijo = dentroString ? '"' : '';
-
   return prefijo + pila.reverse().join('');
+}
+
+function repararJSONTruncado(jsonTexto) {
+  if (!jsonTexto) return null;
+
+  for (let i = jsonTexto.length - 1; i >= 0; i--) {
+    const candidato = jsonTexto.slice(0, i + 1);
+    const ultimoChar = candidato[candidato.length - 1];
+    if (!['}', ']', ',', '"'].includes(ultimoChar)) continue;
+
+    const cierre = construirCierre(candidato);
+    if (cierre === null) continue;
+
+    let base = candidato;
+    if (ultimoChar === ',') base = base.slice(0, -1);
+
+    try {
+      const resultado = JSON.parse(base + cierre);
+      if (resultado && typeof resultado === 'object') return resultado;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 function parsearJSON(texto, contexto) {
   const jsonLimpio = limpiarRespuestaJSON(texto);
 
   if (!jsonLimpio) {
-    console.warn(`[ia] Respuesta vacía en "${contexto}" (probablemente se cortó por límite de tokens). Intentando recuperar lo posible...`);
-
-    // Incluso con jsonLimpio vacío, intentamos reparar sobre el texto
-    // crudo original (sin limpiar) por si el corte ocurrió de forma
-    // que limpiarRespuestaJSON dejó la cadena vacía.
+    console.warn(`[ia] Respuesta vacía en "${contexto}", intentando reparar desde texto crudo...`);
     const reparadoDesdeOriginal = repararJSONTruncado(texto.trim());
     if (reparadoDesdeOriginal && Object.keys(reparadoDesdeOriginal).length > 0) {
-      console.warn(`[ia] Se recuperaron datos parciales para "${contexto}" desde una respuesta truncada.`);
+      console.warn(`[ia] Se recuperaron datos parciales para "${contexto}" desde respuesta truncada.`);
       return reparadoDesdeOriginal;
     }
-
     if (contexto === 'global') {
       return {
         tema_central: 'No disponible',
@@ -179,10 +153,6 @@ function parsearJSON(texto, contexto) {
   }
 }
 
-/**
- * Divide el texto en chunks respetando límites de párrafos.
- * Cada chunk incluye su índice, startChar y endChar.
- */
 function dividirEnChunks(texto) {
   const chunks = [];
   let inicio = 0;
@@ -190,13 +160,11 @@ function dividirEnChunks(texto) {
   while (inicio < texto.length) {
     let fin = Math.min(inicio + CHUNK_CHARS, texto.length);
 
-    // Intentar cortar en salto de párrafo doble
     if (fin < texto.length) {
-      const cortePárrafo = texto.lastIndexOf('\n\n', fin);
-      if (cortePárrafo > inicio + CHUNK_CHARS * 0.5) {
-        fin = cortePárrafo;
+      const corteParrafo = texto.lastIndexOf('\n\n', fin);
+      if (corteParrafo > inicio + CHUNK_CHARS * 0.5) {
+        fin = corteParrafo;
       } else {
-        // Fallback: cortar en punto seguido de espacio
         const cortePunto = texto.lastIndexOf('. ', fin);
         if (cortePunto > inicio + CHUNK_CHARS * 0.5) {
           fin = cortePunto + 1;
@@ -221,17 +189,72 @@ function dividirEnChunks(texto) {
 }
 
 /**
- * Valida que fragmento_original exista exactamente en el texto completo.
+ * Búsqueda tolerante: intenta encontrar el fragmento en el texto
+ * completo con distintos niveles de tolerancia:
+ * 1. Búsqueda exacta
+ * 2. Normalizando espacios múltiples
+ * 3. Ignorando diferencias de puntuación al inicio/fin
+ * 4. Buscando con los primeros 60 caracteres (para fragmentos
+ *    donde la IA alargó el texto)
+ *
  * Devuelve la posición de inicio o -1 si no se encuentra.
  */
-function validarFragmento(textoCompleto, fragmento) {
+function buscarFragmentoTolerante(textoCompleto, fragmento) {
   if (!fragmento || typeof fragmento !== 'string') return -1;
-  return textoCompleto.indexOf(fragmento);
+
+  // 1. Exacto
+  let idx = textoCompleto.indexOf(fragmento);
+  if (idx !== -1) return idx;
+
+  // 2. Normalizando espacios
+  const fragNorm = fragmento.replace(/\s+/g, ' ').trim();
+  const textoNorm = textoCompleto.replace(/\s+/g, ' ');
+  idx = textoNorm.indexOf(fragNorm);
+  if (idx !== -1) {
+    // Mapear posición del texto normalizado al texto real
+    return mapearPosicionNormalizada(textoCompleto, idx);
+  }
+
+  // 3. Con los primeros 50 caracteres (la IA puede haber extendido el fragmento)
+  const prefijo = fragNorm.slice(0, 50);
+  if (prefijo.length >= 20) {
+    idx = textoNorm.indexOf(prefijo);
+    if (idx !== -1) return mapearPosicionNormalizada(textoCompleto, idx);
+  }
+
+  // 4. Ignorando puntuación al inicio del fragmento (comas, puntos, etc.)
+  const fragSinPuntuacion = fragNorm.replace(/^[^a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+/, '');
+  if (fragSinPuntuacion !== fragNorm && fragSinPuntuacion.length >= 15) {
+    idx = textoNorm.indexOf(fragSinPuntuacion.slice(0, 50));
+    if (idx !== -1) return mapearPosicionNormalizada(textoCompleto, idx);
+  }
+
+  return -1;
 }
 
-/**
- * Elimina sugerencias duplicadas basándose en fragmento_original.
- */
+function mapearPosicionNormalizada(textoReal, posNorm) {
+  let posReal = 0;
+  let posColapsada = 0;
+
+  while (posColapsada < posNorm && posReal < textoReal.length) {
+    if (/\s/.test(textoReal[posReal])) {
+      while (posReal < textoReal.length && /\s/.test(textoReal[posReal])) {
+        posReal++;
+      }
+      posColapsada++;
+    } else {
+      posReal++;
+      posColapsada++;
+    }
+  }
+
+  return posReal;
+}
+
+function validarFragmento(textoCompleto, fragmento) {
+  return buscarFragmentoTolerante(textoCompleto, fragmento);
+}
+
 function deduplicarSugerencias(sugerencias) {
   const vistas = new Set();
   return sugerencias.filter((s) => {
@@ -243,7 +266,6 @@ function deduplicarSugerencias(sugerencias) {
 
 // ─────────────────────────────────────────────────────────────
 // LLAMADA 1 — Análisis global liviano
-// Lee el sermón completo y devuelve contexto sin sugerencias extensas
 // ─────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT_GLOBAL = `Eres un asistente editorial especializado en sermones cristianos en español.
@@ -255,7 +277,7 @@ Devuelve un JSON con esta estructura exacta:
   "tema_central": "frase corta",
   "tono": "descripción breve del estilo del pastor (ej: didáctico, narrativo, exhortativo)",
   "resumen": "2-3 oraciones resumiendo el mensaje principal",
-  "terminos_clave": ["término1", "término2", "..."],
+  "terminos_clave": ["término1", "término2"],
   "secciones": [
     { "titulo": "título corto", "fragmento_inicio": "primeras 6-8 palabras EXACTAS del texto donde inicia esta sección" }
   ],
@@ -265,10 +287,11 @@ Devuelve un JSON con esta estructura exacta:
   "instrucciones_editoriales": "nota breve sobre cómo mantener la voz del pastor al editar"
 }
 
-Para "secciones": identifica SOLO las partes que el pastor anuncia explícitamente ("la primera parte...", "el segundo punto...", etc.). Si no hay, devuelve [].
-Para "parrafos": identifica los cortes naturales de párrafo en TODO el sermón de inicio a fin. Cubre todo el texto.
-Las palabras en fragmento_inicio deben ser EXACTAS (carácter por carácter) tal como aparecen en el texto.
-Responde ÚNICAMENTE con el JSON, sin texto extra, sin markdown.`;
+REGLAS CRÍTICAS:
+- Para "secciones": identifica SOLO las partes que el pastor anuncia explícitamente. Si no hay, devuelve [].
+- Para "parrafos": identifica los cortes naturales de párrafo en TODO el sermón. No pongas más de 80 entradas en total entre parrafos y secciones. Prioriza los cortes más claros e importantes.
+- Las palabras en fragmento_inicio deben ser EXACTAS (carácter por carácter) tal como aparecen en el texto.
+- Responde ÚNICAMENTE con el JSON, sin texto extra, sin markdown.`;
 
 async function analizarGlobal(textoCompleto, capituloId = null) {
   console.log(`[ia] Análisis global (${textoCompleto.length} chars)`);
@@ -296,55 +319,56 @@ async function analizarGlobal(textoCompleto, capituloId = null) {
 
 const SYSTEM_PROMPT_CHUNK = `Eres un asistente editorial especializado en transformar transcripciones orales de sermones cristianos en español en capítulos de libro bien escritos.
 
-Recibes un FRAGMENTO del sermón junto con contexto global del sermón completo.
+Recibes un FRAGMENTO del sermón. Debes generar sugerencias de mejora para TODO el fragmento de principio a fin.
 
-Tu trabajo: generar sugerencias de mejora SOLO para este fragmento, cubriéndolo de principio a fin, aplicando los siguientes criterios editoriales:
+═══════════════════════════════════════════
+REGLA MÁS IMPORTANTE — CATEGORÍAS OBLIGATORIAS
+═══════════════════════════════════════════
+Tienes 7 categorías. DEBES usar la más específica que aplique. Solo usa "mejorar_redaccion" cuando ninguna otra categoría más específica aplica mejor. Revisa SIEMPRE en este orden:
 
-TIPOS DE CAMBIOS Y CRITERIOS DETALLADOS:
+1. ¿Es una muletilla oral, llamado a la audiencia, o saludo del culto? → "eliminar_muletilla"
+   Ejemplos: "eh", "o sea", "verdad", "¿no?", "dígale al de al lado", "levante la mano", "repita conmigo", "buenos días hermanos", "bienvenidos a la iglesia", "oremos para iniciar", anuncios del culto.
 
-- "mejorar_redaccion": transforma frases orales en prosa escrita. Esta es la categoría más amplia e incluye:
-  1. Preguntas retóricas: identifica todas las del fragmento y mejora su redacción para que resulten más claras e impactantes en formato de libro, sin cambiar su intención.
-  2. Expresiones demasiado informales o coloquiales: propón una versión más apropiada para un libro, manteniendo la voz cercana del pastor.
-  3. Frases que se entienden al escucharlas pero resultan ambiguas o confusas al leerlas: reescríbelas para que sean claras en formato de libro.
-  4. Cambios innecesarios entre primera persona singular, primera persona plural y segunda persona: propón una voz narrativa más consistente.
-  5. Puntuación y construcción de frases: corrige cuando sea necesario para que la oración sea correcta, sin cambiar ideas, ejemplos ni vocabulario salvo que sea imprescindible.
+2. ¿Es una idea repetida que ya se dijo con otras palabras? → "eliminar_redundancia"
+   Ejemplos: cuando el pastor dice lo mismo dos o tres veces para enfatizar, pero por escrito sobra.
 
-- "mejorar_transicion": revisa ÚNICAMENTE los conectores entre párrafos e ideas. Sugiere cambios donde la transición sea abrupta, confusa o inexistente.
+3. ¿Es un error claro de transcripción de Whisper, nombre bíblico deformado, o frase sin sentido? → "corregir_transcripcion"
+   Ejemplos: palabras inventadas, nombres propios mal escritos, frases que no tienen sentido en contexto.
 
-- "eliminar_opinion_personal": identifica comentarios personales, anécdotas o apartes que interrumpan el tema principal. Sugiere eliminarlos o integrarlos mejor al argumento. También incluye saludos, agradecimientos, anuncios o instrucciones propias del culto que no deban aparecer en el capítulo final (sugiere eliminarlos manteniendo la continuidad).
+4. ¿Es un conector abrupto entre dos párrafos o ideas? → "mejorar_transicion"
+   Ejemplos: cambios de tema sin conectar, párrafos que no fluyen entre sí.
 
-- "eliminar_muletilla": elimina "eh", "o sea", "como les digo", "verdad", "¿no?" repetidos en exceso. También incluye llamados a la audiencia propios de una prédica oral en vivo, como "dígale al que está a su lado", "levante la mano" o "repita conmigo" — propón una adaptación adecuada para un capítulo de libro (puede ser reformular como afirmación o eliminar si no aporta al texto escrito).
+5. ¿Es un comentario personal, anécdota tangencial, o aparte que interrumpe el tema? → "eliminar_opinion_personal"
+   Ejemplos: opiniones del pastor no relacionadas con la enseñanza, digresiones personales.
 
-- "eliminar_redundancia": elimina ideas repetidas innecesariamente por escrito. Incluye específicamente cuando el pastor repite la misma enseñanza usando palabras diferentes — conserva la versión más clara y propón una redacción unificada.
+6. ¿Es una idea incompleta que quedó cortada y necesita una frase de cierre? → "ampliar"
+   Ejemplos: frases que empiezan una idea y la dejan sin concluir.
 
-- "ampliar": identifica ideas que comienzan pero no terminan de desarrollarse. Propón una frase breve de cierre, SIN agregar enseñanzas nuevas que no estén respaldadas por el sermón.
+7. Solo si ninguna de las anteriores aplica: ¿Es una frase oral que funciona hablando pero no como texto escrito? → "mejorar_redaccion"
+   Ejemplos: oraciones largas, frases coloquiales, voz inconsistente, preguntas retóricas poco claras, ambigüedad al leer.
 
-- "corregir_transcripcion": revisa todas las referencias bíblicas, nombres bíblicos y términos cristianos. Corrige ÚNICAMENTE aquellos que parezcan errores de transcripción (palabras inventadas, nombres deformados, frases incoherentes por error de Whisper).
-
-REGLAS CRÍTICAS:
-1. "fragmento_original": copia texto EXACTO del fragmento (carácter por carácter). Máximo 35 palabras pero suficiente para ser único.
-2. "fragmento_nuevo": texto propuesto. Máximo 80 palabras. Si necesitas más, escribe las primeras 80 palabras + "...".
-3. "problema": máximo 12 palabras, indicando claramente cuál de los criterios aplicaste (ej. "pregunta retórica poco clara", "oración demasiado larga", "llamado oral de culto").
-4. Cubre TODO el fragmento de inicio a fin. No te detengas a mitad.
-5. No inventes fragmentos. No parafrasees fragmento_original.
-6. Nunca cambies el mensaje, la enseñanza ni la intención del pastor — solo la forma en que está expresado.
-7. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown.
-8. Si no hay sugerencias útiles: { "sugerencias": [] }`;
+═══════════════════════════════════════════
+REGLAS DE FORMATO
+═══════════════════════════════════════════
+1. "fragmento_original": copia el texto EXACTAMENTE como aparece en el fragmento (carácter por carácter). Máximo 35 palabras. NUNCA parafrasees ni modifiques ni una coma.
+2. "fragmento_nuevo": texto propuesto como reemplazo. Máximo 80 palabras. Si necesitas más, escribe las primeras 80 palabras + "...".
+3. "problema": máximo 12 palabras explicando el problema específico detectado.
+4. Cubre TODO el fragmento de principio a fin sin omitir secciones.
+5. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown, sin backticks.
+6. Si genuinamente no hay nada que mejorar: { "sugerencias": [] }`;
 
 async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = null) {
   console.log(`[ia] Chunk ${chunk.index + 1}/${totalChunks} (${chunk.contenido.length} chars)`);
   await actualizarEstadoDetalle(
     capituloId,
-    `Generando recomendaciones de redacción: parte ${chunk.index + 1} de ${totalChunks} (GPT-5 mini)...`
+    `Generando recomendaciones: parte ${chunk.index + 1} de ${totalChunks} (GPT-5 mini)...`
   );
 
-  const contextoResumido = `
-CONTEXTO DEL SERMÓN COMPLETO:
+  const contextoResumido = `CONTEXTO DEL SERMÓN:
 - Tema: ${contextoGlobal.tema_central}
-- Tono del pastor: ${contextoGlobal.tono}
+- Tono: ${contextoGlobal.tono}
 - Resumen: ${contextoGlobal.resumen}
-- Instrucciones editoriales: ${contextoGlobal.instrucciones_editoriales}
-`.trim();
+- Instrucciones: ${contextoGlobal.instrucciones_editoriales}`.trim();
 
   const userContent = `${contextoResumido}
 
@@ -409,10 +433,6 @@ async function procesarChunkConInstruccion(chunk, instruccion, totalChunks, capi
   const data = parsearJSON(texto, `instruccion-chunk-${chunk.index + 1}`);
   return Array.isArray(data.sugerencias) ? data.sugerencias : [];
 }
-
-// ─────────────────────────────────────────────────────────────
-// Versión sin contexto global (para rondas de sugerencias sin análisis previo)
-// ─────────────────────────────────────────────────────────────
 
 async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
   await actualizarEstadoDetalle(
@@ -495,13 +515,8 @@ export async function analizarSugerencias(textoCompleto, instruccion = null, cap
   return deduplicadas;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Función combinada — usada por analisisIA.job.js (mantiene firma)
-// ─────────────────────────────────────────────────────────────
-
 export async function analizarTexto(textoCompleto, instruccionAdicional = null, esAnalisisInicial = true, capituloId = null) {
   if (esAnalisisInicial) {
-    // 1. Análisis global liviano (párrafos + secciones + contexto)
     const global = await analizarGlobal(textoCompleto, capituloId);
     const parrafos = Array.isArray(global.parrafos) ? global.parrafos : [];
     const secciones = Array.isArray(global.secciones) ? global.secciones : [];
@@ -513,7 +528,6 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
 
     await dormir(PAUSA_ENTRE_LLAMADAS_MS);
 
-    // 2. Sugerencias por chunks secuenciales con contexto global
     const chunks = dividirEnChunks(textoCompleto);
     console.log(`[ia] ${chunks.length} chunks para análisis inicial`);
 
@@ -550,7 +564,6 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
     deduplicadas.forEach((s) => delete s._posicion);
 
     console.log(`[ia] Análisis completo: ${parrafos.length} párrafos, ${secciones.length} secciones, ${deduplicadas.length} sugerencias`);
-
     await actualizarEstadoDetalle(capituloId, 'Análisis con IA completado. Preparando resultados...');
 
     return { parrafos, secciones, sugerencias: deduplicadas };
