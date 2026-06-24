@@ -322,72 +322,84 @@ function deduplicarSugerencias(sugerencias) {
  * 4. Sin límite de reintentos para rate limit — espera y reintenta siempre
  */
 async function llamarOpenAI(params, contexto, capituloId = null) {
-  // Estimado conservador: input tokens ≈ chars/4, output = max_tokens completo
   const tokensEstimados = Math.ceil(
     (JSON.stringify(params.messages).length / 4) + (params.max_completion_tokens || 8000)
   );
 
-  // Esperar proactivamente si estamos cerca del límite de TPM
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
 
   while (true) {
     intentoTotal++;
+    
+    // AbortController para timeout confiable — más robusto que el
+    // parámetro timeout del SDK que a veces no funciona correctamente
+    const controller = new AbortController();
+    const TIMEOUT_MS = 120000; // 2 minutos por llamada
+    const timeoutId = setTimeout(() => {
+      console.warn(`[ia] ${contexto}: Timeout de ${TIMEOUT_MS / 1000}s alcanzado, abortando...`);
+      controller.abort();
+    }, TIMEOUT_MS);
+
     try {
       const response = await openai.chat.completions.create(
         params,
-        { timeout: 180000 } // 3 minutos de timeout por llamada
+        { signal: controller.signal }
       );
 
-      // Registrar tokens reales usados en la ventana deslizante
+      clearTimeout(timeoutId);
+
       const tokensReales = (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0);
       registrarTokens(tokensReales);
 
       return response;
 
     } catch (err) {
+      clearTimeout(timeoutId);
+
       const es429 = err?.status === 429
         || err?.message?.includes('429')
         || err?.message?.includes('Rate limit')
         || err?.message?.includes('rate limit');
 
-      const esTimeout = err?.message?.includes('timeout')
+      const esAbortado = err?.name === 'AbortError'
+        || err?.message?.includes('aborted')
+        || err?.message?.includes('abort');
+
+      const esTimeout = esAbortado
+        || err?.message?.includes('timeout')
         || err?.message?.includes('Timeout')
         || err?.code === 'ETIMEDOUT'
-        || err?.code === 'ECONNRESET'
-        || err?.type === 'request-timeout';
+        || err?.code === 'ECONNRESET';
 
       if (es429) {
-        // Rate limit: extraer tiempo de espera del header si está disponible,
-        // si no, esperar 60 segundos y reintentar siempre (sin límite de intentos)
         const retryAfter = err?.headers?.['retry-after'];
         const esperaMs = retryAfter ? parseFloat(retryAfter) * 1000 : 60000;
         const segundos = Math.ceil(esperaMs / 1000);
 
-        console.warn(`[ia] ${contexto}: Rate limit 429 (intento ${intentoTotal}). Esperando ${segundos}s y reintentando...`);
+        console.warn(`[ia] ${contexto}: Rate limit 429 (intento ${intentoTotal}). Esperando ${segundos}s...`);
         await actualizarEstadoDetalle(
           capituloId,
-          `OpenAI alcanzó su límite de velocidad. Esperando ${segundos}s y reintentando automáticamente (intento ${intentoTotal})...`
+          `OpenAI alcanzó su límite. Esperando ${segundos}s y reintentando (intento ${intentoTotal})...`
         );
         await dormir(esperaMs);
-        continue; // reintentar sin límite
+        continue;
       }
 
       if (esTimeout) {
-        // Timeout: esperar 30s y reintentar hasta 3 veces
-        if (intentoTotal <= 3) {
-          console.warn(`[ia] ${contexto}: Timeout (intento ${intentoTotal}/3). Esperando 30s y reintentando...`);
+        if (intentoTotal <= 5) {
+          const esperaMs = 30000;
+          console.warn(`[ia] ${contexto}: Timeout/abort (intento ${intentoTotal}/5). Esperando 30s...`);
           await actualizarEstadoDetalle(
             capituloId,
-            `OpenAI no respondió a tiempo. Esperando 30s y reintentando (intento ${intentoTotal}/3)...`
+            `OpenAI no respondió en 2 minutos. Esperando 30s y reintentando (intento ${intentoTotal}/5)...`
           );
-          await dormir(30000);
+          await dormir(esperaMs);
           continue;
         }
       }
 
-      // Error no reintentable o timeouts agotados
       console.error(`[ia] ${contexto}: error definitivo (intento ${intentoTotal}): ${err.message}`);
       throw err;
     }
