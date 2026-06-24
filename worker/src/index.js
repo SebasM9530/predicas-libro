@@ -35,6 +35,11 @@ const worker = new Worker(
   {
     connection,
     concurrency: CONCURRENCY,
+    // Reducir polling a Redis para no agotar el límite gratuito de
+    // Upstash (500k requests/mes).
+    stalledInterval: 60000,    // revisar jobs atascados: cada 60s (default 30s)
+    lockDuration: 1800000,     // 30 minutos máximo por job antes de marcarlo fallido
+    lockRenewTime: 30000,      // renovar el bloqueo cada 30s
   }
 );
 
@@ -51,8 +56,9 @@ console.log(`Worker iniciado con concurrencia ${CONCURRENCY}, esperando trabajos
 // ─────────────────────────────────────────────────────────────
 // Servidor HTTP mínimo: necesario para que Render acepte este
 // proceso como "Web Service" (gratis) en vez de "Background Worker"
-// (de pago). También sirve como endpoint de "ping" para mantenerlo
-// despierto desde un servicio externo como cron-job.org.
+// (de pago). El endpoint /wakeup es llamado por el backend cuando
+// encola un job nuevo — así el worker se despierta bajo demanda
+// en vez de necesitar un ping externo constante.
 // ─────────────────────────────────────────────────────────────
 
 const app = express();
@@ -70,6 +76,11 @@ app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/wakeup', (req, res) => {
+  console.log('[worker] Wakeup recibido desde el backend');
+  res.json({ ok: true, mensaje: 'Worker despertado, procesando jobs...' });
+});
+
 app.listen(PORT, () => {
-  console.log(`Servidor HTTP del worker escuchando en el puerto ${PORT} (solo para health-check)`);
+  console.log(`Servidor HTTP del worker escuchando en el puerto ${PORT}`);
 });

@@ -44,12 +44,6 @@ function limpiarRespuestaJSON(texto) {
   return limpio.trim();
 }
 
-/**
- * Recorre el texto y determina qué llaves/corchetes/strings quedaron
- * abiertos, devolviendo el string necesario para cerrarlos en orden
- * inverso (LIFO). Devuelve null si el texto tiene una estructura
- * inválida que no se puede determinar con seguridad.
- */
 function construirCierre(texto) {
   const pila = [];
   let dentroString = false;
@@ -188,17 +182,6 @@ function dividirEnChunks(texto) {
   return chunks;
 }
 
-/**
- * Búsqueda tolerante: intenta encontrar el fragmento en el texto
- * completo con distintos niveles de tolerancia:
- * 1. Búsqueda exacta
- * 2. Normalizando espacios múltiples
- * 3. Ignorando diferencias de puntuación al inicio/fin
- * 4. Buscando con los primeros 60 caracteres (para fragmentos
- *    donde la IA alargó el texto)
- *
- * Devuelve la posición de inicio o -1 si no se encuentra.
- */
 function buscarFragmentoTolerante(textoCompleto, fragmento) {
   if (!fragmento || typeof fragmento !== 'string') return -1;
 
@@ -210,19 +193,16 @@ function buscarFragmentoTolerante(textoCompleto, fragmento) {
   const fragNorm = fragmento.replace(/\s+/g, ' ').trim();
   const textoNorm = textoCompleto.replace(/\s+/g, ' ');
   idx = textoNorm.indexOf(fragNorm);
-  if (idx !== -1) {
-    // Mapear posición del texto normalizado al texto real
-    return mapearPosicionNormalizada(textoCompleto, idx);
-  }
+  if (idx !== -1) return mapearPosicionNormalizada(textoCompleto, idx);
 
-  // 3. Con los primeros 50 caracteres (la IA puede haber extendido el fragmento)
+  // 3. Con los primeros 50 caracteres
   const prefijo = fragNorm.slice(0, 50);
   if (prefijo.length >= 20) {
     idx = textoNorm.indexOf(prefijo);
     if (idx !== -1) return mapearPosicionNormalizada(textoCompleto, idx);
   }
 
-  // 4. Ignorando puntuación al inicio del fragmento (comas, puntos, etc.)
+  // 4. Ignorando puntuación al inicio
   const fragSinPuntuacion = fragNorm.replace(/^[^a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+/, '');
   if (fragSinPuntuacion !== fragNorm && fragSinPuntuacion.length >= 15) {
     idx = textoNorm.indexOf(fragSinPuntuacion.slice(0, 50));
@@ -377,7 +357,7 @@ ${chunk.contenido}`;
 
   const response = await openai.chat.completions.create({
     model: MODELO,
-    max_completion_tokens: 12000,
+    max_completion_tokens: 16000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_CHUNK },
       { role: 'user', content: userContent },
@@ -442,7 +422,7 @@ async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
 
   const response = await openai.chat.completions.create({
     model: MODELO,
-    max_completion_tokens: 12000,
+    max_completion_tokens: 16000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_CHUNK },
       {
