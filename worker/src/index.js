@@ -8,7 +8,7 @@ import { procesarAnalisisIA } from './jobs/analisisIA.job.js';
 
 dotenv.config();
 
-const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10);
+const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '1', 10);
 
 const worker = new Worker(
   'capitulos',
