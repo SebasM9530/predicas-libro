@@ -3,7 +3,7 @@
  *
  * Modelo: gpt-5-mini (OpenAI)
  * Estrategia: análisis global liviano → chunks secuenciales para sugerencias
- * Límites: 60,000 TPM / 10 RPM → procesamiento secuencial con pausas
+ * Límites: 60,000 TPM / 10 RPM → control proactivo de TPM con ventana deslizante
  */
 
 import OpenAI from 'openai';
@@ -17,8 +17,79 @@ const openai = new OpenAI({
 });
 
 const MODELO = 'gpt-5-mini';
-const CHUNK_CHARS = 6000;
-const PAUSA_ENTRE_LLAMADAS_MS = 7000;
+const CHUNK_CHARS = 5000;
+
+// ─────────────────────────────────────────────────────────────
+// Control de TPM (tokens por minuto) — ventana deslizante
+// ─────────────────────────────────────────────────────────────
+
+// Límite real de la cuenta (conservador: usamos 50k de los 60k para dejar margen)
+const TPM_LIMITE = 50000;
+const VENTANA_MS = 60000; // 1 minuto
+
+// Historial de uso: array de { timestamp, tokens }
+const historialTokens = [];
+
+/**
+ * Registra el uso de tokens de una llamada completada.
+ */
+function registrarTokens(tokens) {
+  historialTokens.push({ timestamp: Date.now(), tokens });
+  // Limpiar entradas más antiguas que 1 minuto
+  const ahora = Date.now();
+  while (historialTokens.length > 0 && ahora - historialTokens[0].timestamp > VENTANA_MS) {
+    historialTokens.shift();
+  }
+}
+
+/**
+ * Calcula cuántos tokens se han usado en el último minuto.
+ */
+function tokensUsadosEnVentana() {
+  const ahora = Date.now();
+  return historialTokens
+    .filter((e) => ahora - e.timestamp < VENTANA_MS)
+    .reduce((sum, e) => sum + e.tokens, 0);
+}
+
+/**
+ * Si el uso reciente está cerca del límite, espera hasta que
+ * la ventana libere suficiente espacio para los tokens estimados.
+ *
+ * @param {number} tokensEstimados - tokens que se van a usar en la próxima llamada
+ * @param {string} contexto - para logging
+ * @param {string|null} capituloId - para actualizar estado en frontend
+ */
+async function esperarSiNecesario(tokensEstimados, contexto, capituloId = null) {
+  const usados = tokensUsadosEnVentana();
+  const disponibles = TPM_LIMITE - usados;
+
+  if (tokensEstimados <= disponibles) return; // hay espacio, continuar
+
+  // Calcular cuánto tiempo esperar: buscar cuándo vence el token más antiguo
+  // que libere suficiente espacio
+  const ahora = Date.now();
+  let tokensALiberar = 0;
+  let tiempoEspera = VENTANA_MS;
+
+  for (const entrada of historialTokens) {
+    tokensALiberar += entrada.tokens;
+    if (usados - tokensALiberar + tokensEstimados <= TPM_LIMITE) {
+      tiempoEspera = Math.max(0, (entrada.timestamp + VENTANA_MS) - ahora) + 2000; // +2s margen
+      break;
+    }
+  }
+
+  const segundos = Math.ceil(tiempoEspera / 1000);
+  console.warn(`[ia] ${contexto}: cerca del límite TPM (${usados}/${TPM_LIMITE} tokens usados). Esperando ${segundos}s...`);
+
+  await actualizarEstadoDetalle(
+    capituloId,
+    `Límite de velocidad de OpenAI próximo. Esperando ${segundos}s para continuar sin interrupciones...`
+  );
+
+  await dormir(tiempoEspera);
+}
 
 // ─────────────────────────────────────────────────────────────
 // Utilidades
@@ -99,7 +170,7 @@ function parsearJSON(texto, contexto) {
     console.warn(`[ia] Respuesta vacía en "${contexto}", intentando reparar desde texto crudo...`);
     const reparadoDesdeOriginal = repararJSONTruncado(texto.trim());
     if (reparadoDesdeOriginal && Object.keys(reparadoDesdeOriginal).length > 0) {
-      console.warn(`[ia] Se recuperaron datos parciales para "${contexto}" desde respuesta truncada.`);
+      console.warn(`[ia] Se recuperaron datos parciales para "${contexto}".`);
       return reparadoDesdeOriginal;
     }
     if (contexto === 'global') {
@@ -128,7 +199,6 @@ function parsearJSON(texto, contexto) {
     }
 
     if (contexto === 'global') {
-      console.warn(`[ia] No se pudo reparar "${contexto}", devolviendo estructura mínima`);
       return {
         tema_central: 'No disponible',
         tono: 'No disponible',
@@ -185,24 +255,20 @@ function dividirEnChunks(texto) {
 function buscarFragmentoTolerante(textoCompleto, fragmento) {
   if (!fragmento || typeof fragmento !== 'string') return -1;
 
-  // 1. Exacto
   let idx = textoCompleto.indexOf(fragmento);
   if (idx !== -1) return idx;
 
-  // 2. Normalizando espacios
   const fragNorm = fragmento.replace(/\s+/g, ' ').trim();
   const textoNorm = textoCompleto.replace(/\s+/g, ' ');
   idx = textoNorm.indexOf(fragNorm);
   if (idx !== -1) return mapearPosicionNormalizada(textoCompleto, idx);
 
-  // 3. Con los primeros 50 caracteres
   const prefijo = fragNorm.slice(0, 50);
   if (prefijo.length >= 20) {
     idx = textoNorm.indexOf(prefijo);
     if (idx !== -1) return mapearPosicionNormalizada(textoCompleto, idx);
   }
 
-  // 4. Ignorando puntuación al inicio
   const fragSinPuntuacion = fragNorm.replace(/^[^a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+/, '');
   if (fragSinPuntuacion !== fragNorm && fragSinPuntuacion.length >= 15) {
     idx = textoNorm.indexOf(fragSinPuntuacion.slice(0, 50));
@@ -245,6 +311,90 @@ function deduplicarSugerencias(sugerencias) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Llamada a OpenAI con control de TPM + reintento automático
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Llama a OpenAI con:
+ * 1. Control proactivo de TPM: espera si estamos cerca del límite
+ * 2. Timeout de 3 minutos por llamada
+ * 3. Reintento automático si hay rate limit (429) o timeout
+ * 4. Sin límite de reintentos para rate limit — espera y reintenta siempre
+ */
+async function llamarOpenAI(params, contexto, capituloId = null) {
+  // Estimado conservador: input tokens ≈ chars/4, output = max_tokens completo
+  const tokensEstimados = Math.ceil(
+    (JSON.stringify(params.messages).length / 4) + (params.max_completion_tokens || 8000)
+  );
+
+  // Esperar proactivamente si estamos cerca del límite de TPM
+  await esperarSiNecesario(tokensEstimados, contexto, capituloId);
+
+  let intentoTotal = 0;
+
+  while (true) {
+    intentoTotal++;
+    try {
+      const response = await openai.chat.completions.create(
+        params,
+        { timeout: 180000 } // 3 minutos de timeout por llamada
+      );
+
+      // Registrar tokens reales usados en la ventana deslizante
+      const tokensReales = (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0);
+      registrarTokens(tokensReales);
+
+      return response;
+
+    } catch (err) {
+      const es429 = err?.status === 429
+        || err?.message?.includes('429')
+        || err?.message?.includes('Rate limit')
+        || err?.message?.includes('rate limit');
+
+      const esTimeout = err?.message?.includes('timeout')
+        || err?.message?.includes('Timeout')
+        || err?.code === 'ETIMEDOUT'
+        || err?.code === 'ECONNRESET'
+        || err?.type === 'request-timeout';
+
+      if (es429) {
+        // Rate limit: extraer tiempo de espera del header si está disponible,
+        // si no, esperar 60 segundos y reintentar siempre (sin límite de intentos)
+        const retryAfter = err?.headers?.['retry-after'];
+        const esperaMs = retryAfter ? parseFloat(retryAfter) * 1000 : 60000;
+        const segundos = Math.ceil(esperaMs / 1000);
+
+        console.warn(`[ia] ${contexto}: Rate limit 429 (intento ${intentoTotal}). Esperando ${segundos}s y reintentando...`);
+        await actualizarEstadoDetalle(
+          capituloId,
+          `OpenAI alcanzó su límite de velocidad. Esperando ${segundos}s y reintentando automáticamente (intento ${intentoTotal})...`
+        );
+        await dormir(esperaMs);
+        continue; // reintentar sin límite
+      }
+
+      if (esTimeout) {
+        // Timeout: esperar 30s y reintentar hasta 3 veces
+        if (intentoTotal <= 3) {
+          console.warn(`[ia] ${contexto}: Timeout (intento ${intentoTotal}/3). Esperando 30s y reintentando...`);
+          await actualizarEstadoDetalle(
+            capituloId,
+            `OpenAI no respondió a tiempo. Esperando 30s y reintentando (intento ${intentoTotal}/3)...`
+          );
+          await dormir(30000);
+          continue;
+        }
+      }
+
+      // Error no reintentable o timeouts agotados
+      console.error(`[ia] ${contexto}: error definitivo (intento ${intentoTotal}): ${err.message}`);
+      throw err;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // LLAMADA 1 — Análisis global liviano
 // ─────────────────────────────────────────────────────────────
 
@@ -275,22 +425,24 @@ REGLAS CRÍTICAS:
 
 async function analizarGlobal(textoCompleto, capituloId = null) {
   console.log(`[ia] Análisis global (${textoCompleto.length} chars)`);
-  await actualizarEstadoDetalle(capituloId, 'Analizando el sermón completo: detectando tema, tono y estructura general...');
+  await actualizarEstadoDetalle(
+    capituloId,
+    'Analizando el sermón completo: detectando tema, tono y estructura general...'
+  );
 
-  const response = await openai.chat.completions.create({
+  const response = await llamarOpenAI({
     model: MODELO,
     max_completion_tokens: 24000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_GLOBAL },
       { role: 'user', content: `Analiza este sermón completo:\n\n${textoCompleto}` },
     ],
-  });
+  }, 'global', capituloId);
 
   const texto = response.choices?.[0]?.message?.content || '';
   console.log(`[ia] Global — tokens: input=${response.usage?.prompt_tokens} output=${response.usage?.completion_tokens}`);
 
-  const data = parsearJSON(texto, 'global');
-  return data;
+  return parsearJSON(texto, 'global');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -334,8 +486,9 @@ REGLAS DE FORMATO
 2. "fragmento_nuevo": texto propuesto como reemplazo. Máximo 80 palabras. Si necesitas más, escribe las primeras 80 palabras + "...".
 3. "problema": máximo 12 palabras explicando el problema específico detectado.
 4. Cubre TODO el fragmento de principio a fin sin omitir secciones.
-5. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown, sin backticks.
-6. Si genuinamente no hay nada que mejorar: { "sugerencias": [] }`;
+5. Genera TODAS las sugerencias que encuentres — no hay límite artificial. El objetivo es cubrir el fragmento completo.
+6. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown, sin backticks.
+7. Si genuinamente no hay nada que mejorar: { "sugerencias": [] }`;
 
 async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = null) {
   console.log(`[ia] Chunk ${chunk.index + 1}/${totalChunks} (${chunk.contenido.length} chars)`);
@@ -355,14 +508,14 @@ async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = nu
 FRAGMENTO ${chunk.index + 1} DE ${totalChunks}:
 ${chunk.contenido}`;
 
-  const response = await openai.chat.completions.create({
+  const response = await llamarOpenAI({
     model: MODELO,
     max_completion_tokens: 16000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_CHUNK },
       { role: 'user', content: userContent },
     ],
-  });
+  }, `chunk-${chunk.index + 1}`, capituloId);
 
   const texto = response.choices?.[0]?.message?.content || '';
   const tokens = response.usage;
@@ -387,8 +540,9 @@ REGLAS:
 2. "fragmento_nuevo": texto propuesto. Máximo 80 palabras.
 3. "problema": máximo 12 palabras.
 4. No inventes fragmentos ni parafrasees fragmento_original.
-5. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown.
-6. Si no hay sugerencias aplicables: { "sugerencias": [] }`;
+5. Genera todas las sugerencias que apliquen — sin límite artificial.
+6. Responde ÚNICAMENTE con: { "sugerencias": [...] } — sin texto extra, sin markdown.
+7. Si no hay sugerencias aplicables: { "sugerencias": [] }`;
 
 async function procesarChunkConInstruccion(chunk, instruccion, totalChunks, capituloId = null) {
   console.log(`[ia] Instrucción chunk ${chunk.index + 1}/${totalChunks}`);
@@ -397,7 +551,7 @@ async function procesarChunkConInstruccion(chunk, instruccion, totalChunks, capi
     `Aplicando tu instrucción: parte ${chunk.index + 1} de ${totalChunks}...`
   );
 
-  const response = await openai.chat.completions.create({
+  const response = await llamarOpenAI({
     model: MODELO,
     max_completion_tokens: 8000,
     messages: [
@@ -407,7 +561,7 @@ async function procesarChunkConInstruccion(chunk, instruccion, totalChunks, capi
         content: `INSTRUCCIÓN DEL PASTOR: "${instruccion}"\n\nFRAGMENTO ${chunk.index + 1} DE ${totalChunks}:\n${chunk.contenido}`,
       },
     ],
-  });
+  }, `instruccion-chunk-${chunk.index + 1}`, capituloId);
 
   const texto = response.choices?.[0]?.message?.content || '';
   const data = parsearJSON(texto, `instruccion-chunk-${chunk.index + 1}`);
@@ -420,7 +574,7 @@ async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
     `Generando recomendaciones: parte ${chunk.index + 1} de ${totalChunks}...`
   );
 
-  const response = await openai.chat.completions.create({
+  const response = await llamarOpenAI({
     model: MODELO,
     max_completion_tokens: 16000,
     messages: [
@@ -430,7 +584,7 @@ async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
         content: `FRAGMENTO ${chunk.index + 1} DE ${totalChunks}:\n${chunk.contenido}`,
       },
     ],
-  });
+  }, `chunk-sin-contexto-${chunk.index + 1}`, capituloId);
 
   const texto = response.choices?.[0]?.message?.content || '';
   const data = parsearJSON(texto, `chunk-${chunk.index + 1}`);
@@ -456,18 +610,25 @@ export async function analizarSugerencias(textoCompleto, instruccion = null, cap
   const todasSugerencias = [];
 
   for (let i = 0; i < chunks.length; i++) {
-    let sugerenciasChunk;
-
-    if (instruccion) {
-      sugerenciasChunk = await procesarChunkConInstruccion(chunks[i], instruccion, chunks.length, capituloId);
-    } else {
-      sugerenciasChunk = await procesarChunkSinContexto(chunks[i], chunks.length, capituloId);
+    let sugerenciasChunk = [];
+    try {
+      if (instruccion) {
+        sugerenciasChunk = await procesarChunkConInstruccion(chunks[i], instruccion, chunks.length, capituloId);
+      } else {
+        sugerenciasChunk = await procesarChunkSinContexto(chunks[i], chunks.length, capituloId);
+      }
+    } catch (err) {
+      console.error(`[ia] Chunk ${i + 1} falló definitivamente: ${err.message}. Continuando...`);
+      await actualizarEstadoDetalle(
+        capituloId,
+        `Parte ${i + 1} de ${chunks.length} no pudo procesarse. Continuando con la siguiente...`
+      );
     }
 
     const validadas = sugerenciasChunk.filter((s) => {
       const pos = validarFragmento(textoCompleto, s.fragmento_original);
       if (pos === -1) {
-        console.warn(`[ia] Sugerencia descartada (fragmento no encontrado): "${s.fragmento_original?.slice(0, 60)}"`);
+        console.warn(`[ia] Descartada: "${s.fragmento_original?.slice(0, 60)}"`);
         return false;
       }
       s._posicion = pos;
@@ -481,10 +642,6 @@ export async function analizarSugerencias(textoCompleto, instruccion = null, cap
       capituloId,
       `Parte ${i + 1} de ${chunks.length} analizada (${validadas.length} recomendaciones encontradas)...`
     );
-
-    if (i < chunks.length - 1) {
-      await dormir(PAUSA_ENTRE_LLAMADAS_MS);
-    }
   }
 
   const deduplicadas = deduplicarSugerencias(todasSugerencias);
@@ -506,20 +663,27 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
       `Análisis general listo (${secciones.length} sección(es) detectadas). Iniciando revisión de redacción...`
     );
 
-    await dormir(PAUSA_ENTRE_LLAMADAS_MS);
-
     const chunks = dividirEnChunks(textoCompleto);
     console.log(`[ia] ${chunks.length} chunks para análisis inicial`);
 
     const todasSugerencias = [];
 
     for (let i = 0; i < chunks.length; i++) {
-      const sugerenciasChunk = await procesarChunk(chunks[i], global, chunks.length, capituloId);
+      let sugerenciasChunk = [];
+      try {
+        sugerenciasChunk = await procesarChunk(chunks[i], global, chunks.length, capituloId);
+      } catch (err) {
+        console.error(`[ia] Chunk ${i + 1}/${chunks.length} falló definitivamente: ${err.message}. Continuando...`);
+        await actualizarEstadoDetalle(
+          capituloId,
+          `Parte ${i + 1} de ${chunks.length} no pudo procesarse. Continuando con la siguiente...`
+        );
+      }
 
       const validadas = sugerenciasChunk.filter((s) => {
         const pos = validarFragmento(textoCompleto, s.fragmento_original);
         if (pos === -1) {
-          console.warn(`[ia] Descartada (no encontrada): "${s.fragmento_original?.slice(0, 60)}"`);
+          console.warn(`[ia] Descartada: "${s.fragmento_original?.slice(0, 60)}"`);
           return false;
         }
         s._posicion = pos;
@@ -533,10 +697,6 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
         capituloId,
         `Redacción revisada: parte ${i + 1} de ${chunks.length} completada (${todasSugerencias.length} recomendaciones hasta ahora)...`
       );
-
-      if (i < chunks.length - 1) {
-        await dormir(PAUSA_ENTRE_LLAMADAS_MS);
-      }
     }
 
     const deduplicadas = deduplicarSugerencias(todasSugerencias);
@@ -554,7 +714,12 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
   const todasSugerencias = [];
 
   for (let i = 0; i < chunks.length; i++) {
-    const sug = await procesarChunkConInstruccion(chunks[i], instruccionAdicional, chunks.length, capituloId);
+    let sug = [];
+    try {
+      sug = await procesarChunkConInstruccion(chunks[i], instruccionAdicional, chunks.length, capituloId);
+    } catch (err) {
+      console.error(`[ia] Instrucción chunk ${i + 1} falló: ${err.message}. Continuando...`);
+    }
 
     const validadas = sug.filter((s) => {
       const pos = validarFragmento(textoCompleto, s.fragmento_original);
@@ -564,10 +729,6 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
     });
 
     todasSugerencias.push(...validadas);
-
-    if (i < chunks.length - 1) {
-      await dormir(PAUSA_ENTRE_LLAMADAS_MS);
-    }
   }
 
   const deduplicadas = deduplicarSugerencias(todasSugerencias);
