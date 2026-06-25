@@ -336,13 +336,14 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
     // AbortController para timeout confiable — más robusto que el
     // parámetro timeout del SDK que a veces no funciona correctamente
     const controller = new AbortController();
-    const TIMEOUT_MS = 120000; // 2 minutos por llamada
+    const TIMEOUT_MS = 300000; // 5 minutos por llamada
     const timeoutId = setTimeout(() => {
       console.warn(`[ia] ${contexto}: Timeout de ${TIMEOUT_MS / 1000}s alcanzado, abortando...`);
       controller.abort();
     }, TIMEOUT_MS);
 
     try {
+      console.log(`[ia] ${contexto}: enviando request a OpenAI (intento ${intentoTotal})...`);
       const response = await openai.chat.completions.create(
         params,
         { signal: controller.signal }
