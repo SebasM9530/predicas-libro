@@ -350,7 +350,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
-  const TIMEOUT_MS = 90000; // 90s — por debajo del límite silencioso de Render (~120s)
+  const TIMEOUT_MS = 120000; // 90s — por debajo del límite silencioso de Render (~120s)
   const MAX_REINTENTOS_TIMEOUT = 5;
 
   while (true) {
