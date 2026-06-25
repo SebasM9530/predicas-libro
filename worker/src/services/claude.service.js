@@ -28,7 +28,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
-const MODELO = 'gpt-4o-mini';
+const MODELO = 'gpt-5-mini';
 const CHUNK_CHARS = 5000;
 
 // ─────────────────────────────────────────────────────────────
