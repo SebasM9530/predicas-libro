@@ -1,22 +1,34 @@
 /**
  * ia.service.js (mantenemos el nombre claude.service.js para no cambiar imports)
  *
- * Modelo: gpt-5-mini (OpenAI)
+ * Modelo: gpt-4o-mini (OpenAI)
  * Estrategia: análisis global liviano → chunks secuenciales para sugerencias
  * Límites: 60,000 TPM / 10 RPM → control proactivo de TPM con ventana deslizante
+ *
+ * IMPORTANTE: Este servicio usa node-fetch directamente en vez del SDK de OpenAI.
+ * El SDK usa undici internamente y su AbortController NO termina la conexión TCP
+ * en entornos Linux como Render free tier, lo que causa cuelgues silenciosos
+ * en chunks intermedios. node-fetch sí propaga el abort al socket.
  */
 
-import OpenAI from 'openai';
+import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 import { supabase } from './supabase.service.js';
 
 dotenv.config();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// ─────────────────────────────────────────────────────────────
+// Cliente HTTP directo a OpenAI (sin SDK)
+// Motivo: el AbortController del SDK de OpenAI (que usa undici internamente)
+// NO termina la conexión TCP subyacente en entornos Linux como Render.
+// node-fetch sí propaga el abort al socket, lo que permite que el timeout
+// funcione correctamente aunque Render congele la conexión silenciosamente.
+// ─────────────────────────────────────────────────────────────
 
-const MODELO = 'gpt-5-mini';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+
+const MODELO = 'gpt-4o-mini';
 const CHUNK_CHARS = 5000;
 
 // ─────────────────────────────────────────────────────────────
@@ -315,11 +327,20 @@ function deduplicarSugerencias(sugerencias) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Llama a OpenAI con:
- * 1. Control proactivo de TPM: espera si estamos cerca del límite
- * 2. Timeout de 3 minutos por llamada
- * 3. Reintento automático si hay rate limit (429) o timeout
- * 4. Sin límite de reintentos para rate limit — espera y reintenta siempre
+ * Llama a OpenAI directamente via node-fetch (sin SDK).
+ *
+ * Por qué node-fetch en vez del SDK:
+ * - El SDK de OpenAI usa `undici` internamente, cuyo AbortController NO termina
+ *   la conexión TCP subyacente en algunos entornos Linux (como Render free tier).
+ * - Render free tier congela conexiones TCP silenciosamente después de ~90-120s.
+ * - El resultado: el SDK queda colgado para siempre sin lanzar ningún error.
+ * - node-fetch propaga el abort al socket directamente → timeout funciona de verdad.
+ *
+ * Estrategia:
+ * 1. Control proactivo de TPM antes de cada llamada.
+ * 2. Timeout de 90s (justo por debajo del límite de Render) — con AbortController real.
+ * 3. Reintento automático en 429 (rate limit) sin límite de intentos.
+ * 4. Reintento hasta 5 veces en timeout/error de red (espera 20s entre intentos).
  */
 async function llamarOpenAI(params, contexto, capituloId = null) {
   const tokensEstimados = Math.ceil(
@@ -329,76 +350,90 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
+  const TIMEOUT_MS = 90000; // 90s — por debajo del límite silencioso de Render (~120s)
+  const MAX_REINTENTOS_TIMEOUT = 5;
 
   while (true) {
     intentoTotal++;
-    
-    // AbortController para timeout confiable — más robusto que el
-    // parámetro timeout del SDK que a veces no funciona correctamente
+
     const controller = new AbortController();
-    const TIMEOUT_MS = 300000; // 5 minutos por llamada
     const timeoutId = setTimeout(() => {
-      console.warn(`[ia] ${contexto}: Timeout de ${TIMEOUT_MS / 1000}s alcanzado, abortando...`);
+      console.warn(`[ia] ${contexto}: Timeout de ${TIMEOUT_MS / 1000}s alcanzado, abortando socket...`);
       controller.abort();
     }, TIMEOUT_MS);
 
     try {
-      console.log(`[ia] ${contexto}: enviando request a OpenAI (intento ${intentoTotal})...`);
-      const response = await openai.chat.completions.create(
-        params,
-        { signal: controller.signal }
-      );
+      console.log(`[ia] ${contexto}: enviando request a OpenAI via fetch (intento ${intentoTotal})...`);
+
+      const res = await fetch(OPENAI_CHAT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify(params),
+        signal: controller.signal,
+      });
 
       clearTimeout(timeoutId);
 
-      const tokensReales = (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0);
+      // Manejar errores HTTP (429, 500, etc.) antes de parsear el body
+      if (!res.ok) {
+        const errorBody = await res.text().catch(() => '(sin body)');
+
+        if (res.status === 429) {
+          const retryAfter = res.headers.get('retry-after');
+          const esperaMs = retryAfter ? parseFloat(retryAfter) * 1000 : 60000;
+          const segundos = Math.ceil(esperaMs / 1000);
+
+          console.warn(`[ia] ${contexto}: Rate limit 429 (intento ${intentoTotal}). Esperando ${segundos}s...`);
+          await actualizarEstadoDetalle(
+            capituloId,
+            `OpenAI alcanzó su límite de velocidad. Esperando ${segundos}s y reintentando...`
+          );
+          await dormir(esperaMs);
+          continue; // reintento ilimitado en 429
+        }
+
+        // Cualquier otro error HTTP → error definitivo
+        throw new Error(`OpenAI HTTP ${res.status}: ${errorBody.slice(0, 300)}`);
+      }
+
+      const data = await res.json();
+
+      const tokensReales = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0);
       registrarTokens(tokensReales);
 
-      return response;
+      // Adaptar respuesta al mismo formato que usaba el SDK
+      return {
+        choices: data.choices,
+        usage: data.usage,
+      };
 
     } catch (err) {
       clearTimeout(timeoutId);
 
-      const es429 = err?.status === 429
-        || err?.message?.includes('429')
-        || err?.message?.includes('Rate limit')
-        || err?.message?.includes('rate limit');
-
+      // Si ya fue manejado como 429 arriba, no llega aquí
       const esAbortado = err?.name === 'AbortError'
         || err?.message?.includes('aborted')
         || err?.message?.includes('abort');
 
-      const esTimeout = esAbortado
+      const esRedError = esAbortado
         || err?.message?.includes('timeout')
-        || err?.message?.includes('Timeout')
         || err?.code === 'ETIMEDOUT'
-        || err?.code === 'ECONNRESET';
+        || err?.code === 'ECONNRESET'
+        || err?.code === 'ECONNREFUSED'
+        || err?.code === 'ENOTFOUND';
 
-      if (es429) {
-        const retryAfter = err?.headers?.['retry-after'];
-        const esperaMs = retryAfter ? parseFloat(retryAfter) * 1000 : 60000;
-        const segundos = Math.ceil(esperaMs / 1000);
-
-        console.warn(`[ia] ${contexto}: Rate limit 429 (intento ${intentoTotal}). Esperando ${segundos}s...`);
+      if (esRedError && intentoTotal <= MAX_REINTENTOS_TIMEOUT) {
+        const esperaMs = 20000; // 20s entre reintentos (era 30s antes)
+        console.warn(`[ia] ${contexto}: Timeout/error de red (intento ${intentoTotal}/${MAX_REINTENTOS_TIMEOUT}). Esperando ${esperaMs / 1000}s...`);
         await actualizarEstadoDetalle(
           capituloId,
-          `OpenAI alcanzó su límite. Esperando ${segundos}s y reintentando (intento ${intentoTotal})...`
+          `OpenAI no respondió. Reintentando (${intentoTotal}/${MAX_REINTENTOS_TIMEOUT})...`
         );
         await dormir(esperaMs);
         continue;
-      }
-
-      if (esTimeout) {
-        if (intentoTotal <= 5) {
-          const esperaMs = 30000;
-          console.warn(`[ia] ${contexto}: Timeout/abort (intento ${intentoTotal}/5). Esperando 30s...`);
-          await actualizarEstadoDetalle(
-            capituloId,
-            `OpenAI no respondió en 2 minutos. Esperando 30s y reintentando (intento ${intentoTotal}/5)...`
-          );
-          await dormir(esperaMs);
-          continue;
-        }
       }
 
       console.error(`[ia] ${contexto}: error definitivo (intento ${intentoTotal}): ${err.message}`);
