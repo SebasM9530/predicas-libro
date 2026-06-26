@@ -288,7 +288,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
-  const TIMEOUT_MS = 100000; // 100s
+  const TIMEOUT_MS = 300000; // 100s
   const MAX_REINTENTOS = 5;
 
   while (true) {
