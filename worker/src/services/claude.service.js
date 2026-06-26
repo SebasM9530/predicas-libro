@@ -413,7 +413,7 @@ async function analizarGlobal(textoCompleto, capituloId = null) {
 
   const response = await llamarOpenAI({
     model: MODELO,
-    max_completion_tokens: 24000,
+    max_completion_tokens: 8000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_GLOBAL },
       { role: 'user', content: `Analiza este sermón completo:\n\n${textoCompleto}` },
@@ -488,7 +488,7 @@ async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = nu
 
   const response = await llamarOpenAI({
     model: MODELO,
-    max_completion_tokens: 16000,
+    max_completion_tokens: 8000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_CHUNK },
       { role: 'user', content: userContent },
@@ -554,7 +554,7 @@ async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
 
   const response = await llamarOpenAI({
     model: MODELO,
-    max_completion_tokens: 16000,
+    max_completion_tokens: 8000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_CHUNK },
       {
