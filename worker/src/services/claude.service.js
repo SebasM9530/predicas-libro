@@ -1,14 +1,14 @@
 /**
- * ia.service.js (mantenemos el nombre claude.service.js para no cambiar imports)
+ * claude.service.js
  *
- * Modelo: gpt-4o-mini (OpenAI)
+ * Modelo: gpt-5-mini (OpenAI)
  * Estrategia: análisis global liviano → chunks secuenciales para sugerencias
- * Límites: 60,000 TPM / 10 RPM → control proactivo de TPM con ventana deslizante
  *
- * IMPORTANTE: Este servicio usa node-fetch directamente en vez del SDK de OpenAI.
+ * IMPORTANTE: Usa node-fetch directamente en vez del SDK de OpenAI.
  * El SDK usa undici internamente y su AbortController NO termina la conexión TCP
- * en entornos Linux como Render free tier, lo que causa cuelgues silenciosos
- * en chunks intermedios. node-fetch sí propaga el abort al socket.
+ * en entornos Linux como Render free tier, causando cuelgues silenciosos.
+ * node-fetch + header "Connection: close" fuerza socket nuevo por llamada,
+ * lo que garantiza que el timeout funcione correctamente.
  */
 
 import fetch from 'node-fetch';
@@ -16,14 +16,6 @@ import dotenv from 'dotenv';
 import { supabase } from './supabase.service.js';
 
 dotenv.config();
-
-// ─────────────────────────────────────────────────────────────
-// Cliente HTTP directo a OpenAI (sin SDK)
-// Motivo: el AbortController del SDK de OpenAI (que usa undici internamente)
-// NO termina la conexión TCP subyacente en entornos Linux como Render.
-// node-fetch sí propaga el abort al socket, lo que permite que el timeout
-// funcione correctamente aunque Render congele la conexión silenciosamente.
-// ─────────────────────────────────────────────────────────────
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
@@ -35,28 +27,18 @@ const CHUNK_CHARS = 5000;
 // Control de TPM (tokens por minuto) — ventana deslizante
 // ─────────────────────────────────────────────────────────────
 
-// Límite real de la cuenta (conservador: usamos 50k de los 60k para dejar margen)
-const TPM_LIMITE = 50000;
-const VENTANA_MS = 60000; // 1 minuto
-
-// Historial de uso: array de { timestamp, tokens }
+const TPM_LIMITE = 450000; // conservador: usamos 450k de los 500k disponibles
+const VENTANA_MS = 60000;
 const historialTokens = [];
 
-/**
- * Registra el uso de tokens de una llamada completada.
- */
 function registrarTokens(tokens) {
   historialTokens.push({ timestamp: Date.now(), tokens });
-  // Limpiar entradas más antiguas que 1 minuto
   const ahora = Date.now();
   while (historialTokens.length > 0 && ahora - historialTokens[0].timestamp > VENTANA_MS) {
     historialTokens.shift();
   }
 }
 
-/**
- * Calcula cuántos tokens se han usado en el último minuto.
- */
 function tokensUsadosEnVentana() {
   const ahora = Date.now();
   return historialTokens
@@ -64,22 +46,11 @@ function tokensUsadosEnVentana() {
     .reduce((sum, e) => sum + e.tokens, 0);
 }
 
-/**
- * Si el uso reciente está cerca del límite, espera hasta que
- * la ventana libere suficiente espacio para los tokens estimados.
- *
- * @param {number} tokensEstimados - tokens que se van a usar en la próxima llamada
- * @param {string} contexto - para logging
- * @param {string|null} capituloId - para actualizar estado en frontend
- */
 async function esperarSiNecesario(tokensEstimados, contexto, capituloId = null) {
   const usados = tokensUsadosEnVentana();
   const disponibles = TPM_LIMITE - usados;
+  if (tokensEstimados <= disponibles) return;
 
-  if (tokensEstimados <= disponibles) return; // hay espacio, continuar
-
-  // Calcular cuánto tiempo esperar: buscar cuándo vence el token más antiguo
-  // que libere suficiente espacio
   const ahora = Date.now();
   let tokensALiberar = 0;
   let tiempoEspera = VENTANA_MS;
@@ -87,19 +58,17 @@ async function esperarSiNecesario(tokensEstimados, contexto, capituloId = null) 
   for (const entrada of historialTokens) {
     tokensALiberar += entrada.tokens;
     if (usados - tokensALiberar + tokensEstimados <= TPM_LIMITE) {
-      tiempoEspera = Math.max(0, (entrada.timestamp + VENTANA_MS) - ahora) + 2000; // +2s margen
+      tiempoEspera = Math.max(0, (entrada.timestamp + VENTANA_MS) - ahora) + 2000;
       break;
     }
   }
 
   const segundos = Math.ceil(tiempoEspera / 1000);
-  console.warn(`[ia] ${contexto}: cerca del límite TPM (${usados}/${TPM_LIMITE} tokens usados). Esperando ${segundos}s...`);
-
+  console.warn(`[ia] ${contexto}: cerca del límite TPM (${usados}/${TPM_LIMITE}). Esperando ${segundos}s...`);
   await actualizarEstadoDetalle(
     capituloId,
-    `Límite de velocidad de OpenAI próximo. Esperando ${segundos}s para continuar sin interrupciones...`
+    `Límite de velocidad próximo. Esperando ${segundos}s para continuar...`
   );
-
   await dormir(tiempoEspera);
 }
 
@@ -137,7 +106,6 @@ function construirCierre(texto) {
     if (ch === '\\') { escape = true; continue; }
     if (ch === '"') { dentroString = !dentroString; continue; }
     if (dentroString) continue;
-
     if (ch === '{') pila.push('}');
     else if (ch === '[') pila.push(']');
     else if (ch === '}' || ch === ']') {
@@ -179,23 +147,10 @@ function parsearJSON(texto, contexto) {
   const jsonLimpio = limpiarRespuestaJSON(texto);
 
   if (!jsonLimpio) {
-    console.warn(`[ia] Respuesta vacía en "${contexto}", intentando reparar desde texto crudo...`);
-    const reparadoDesdeOriginal = repararJSONTruncado(texto.trim());
-    if (reparadoDesdeOriginal && Object.keys(reparadoDesdeOriginal).length > 0) {
-      console.warn(`[ia] Se recuperaron datos parciales para "${contexto}".`);
-      return reparadoDesdeOriginal;
-    }
-    if (contexto === 'global') {
-      return {
-        tema_central: 'No disponible',
-        tono: 'No disponible',
-        resumen: 'No disponible',
-        terminos_clave: [],
-        secciones: [],
-        parrafos: [],
-        instrucciones_editoriales: 'Mantener la voz del pastor',
-      };
-    }
+    console.warn(`[ia] Respuesta vacía en "${contexto}", intentando reparar...`);
+    const reparado = repararJSONTruncado(texto.trim());
+    if (reparado && Object.keys(reparado).length > 0) return reparado;
+    if (contexto === 'global') return fallbackGlobal();
     return {};
   }
 
@@ -203,30 +158,29 @@ function parsearJSON(texto, contexto) {
     return JSON.parse(jsonLimpio);
   } catch (err) {
     console.warn(`[ia] JSON truncado en "${contexto}", intentando reparar...`);
-
     const reparado = repararJSONTruncado(jsonLimpio);
     if (reparado && Object.keys(reparado).length > 0) {
-      console.warn(`[ia] JSON reparado para "${contexto}" (algunos elementos finales descartados)`);
+      console.warn(`[ia] JSON reparado para "${contexto}"`);
       return reparado;
     }
-
-    if (contexto === 'global') {
-      return {
-        tema_central: 'No disponible',
-        tono: 'No disponible',
-        resumen: 'No disponible',
-        terminos_clave: [],
-        secciones: [],
-        parrafos: [],
-        instrucciones_editoriales: 'Mantener la voz del pastor',
-      };
-    }
-
+    if (contexto === 'global') return fallbackGlobal();
     throw new Error(
       `No se pudo parsear JSON (${contexto}): ${err.message}\n` +
       `Respuesta (primeros 400 chars): ${jsonLimpio.slice(0, 400)}`
     );
   }
+}
+
+function fallbackGlobal() {
+  return {
+    tema_central: 'No disponible',
+    tono: 'No disponible',
+    resumen: 'No disponible',
+    terminos_clave: [],
+    secciones: [],
+    parrafos: [],
+    instrucciones_editoriales: 'Mantener la voz del pastor',
+  };
 }
 
 function dividirEnChunks(texto) {
@@ -250,14 +204,8 @@ function dividirEnChunks(texto) {
 
     const contenido = texto.slice(inicio, fin).trim();
     if (contenido) {
-      chunks.push({
-        index: chunks.length,
-        startChar: inicio,
-        endChar: fin,
-        contenido,
-      });
+      chunks.push({ index: chunks.length, startChar: inicio, endChar: fin, contenido });
     }
-
     inicio = fin;
   }
 
@@ -296,9 +244,7 @@ function mapearPosicionNormalizada(textoReal, posNorm) {
 
   while (posColapsada < posNorm && posReal < textoReal.length) {
     if (/\s/.test(textoReal[posReal])) {
-      while (posReal < textoReal.length && /\s/.test(textoReal[posReal])) {
-        posReal++;
-      }
+      while (posReal < textoReal.length && /\s/.test(textoReal[posReal])) posReal++;
       posColapsada++;
     } else {
       posReal++;
@@ -323,24 +269,16 @@ function deduplicarSugerencias(sugerencias) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Llamada a OpenAI con control de TPM + reintento automático
+// Llamada a OpenAI con node-fetch directo + Connection: close
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Llama a OpenAI directamente via node-fetch (sin SDK).
- *
- * Por qué node-fetch en vez del SDK:
- * - El SDK de OpenAI usa `undici` internamente, cuyo AbortController NO termina
- *   la conexión TCP subyacente en algunos entornos Linux (como Render free tier).
- * - Render free tier congela conexiones TCP silenciosamente después de ~90-120s.
- * - El resultado: el SDK queda colgado para siempre sin lanzar ningún error.
- * - node-fetch propaga el abort al socket directamente → timeout funciona de verdad.
- *
- * Estrategia:
- * 1. Control proactivo de TPM antes de cada llamada.
- * 2. Timeout de 90s (justo por debajo del límite de Render) — con AbortController real.
- * 3. Reintento automático en 429 (rate limit) sin límite de intentos.
- * 4. Reintento hasta 5 veces en timeout/error de red (espera 20s entre intentos).
+ * Por qué node-fetch + Connection: close:
+ * - El SDK de OpenAI usa undici internamente. Su AbortController NO termina
+ *   la conexión TCP en Linux/Render free tier → cuelgue silencioso infinito.
+ * - node-fetch propaga el abort al socket directamente → timeout real.
+ * - Connection: close fuerza TCP nuevo por llamada → evita reutilizar
+ *   sockets que Render puede haber congelado silenciosamente.
  */
 async function llamarOpenAI(params, contexto, capituloId = null) {
   const tokensEstimados = Math.ceil(
@@ -350,15 +288,15 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
-  const TIMEOUT_MS = 90000;
-  const MAX_REINTENTOS_TIMEOUT = 5;
+  const TIMEOUT_MS = 90000; // 90s — por debajo del límite de Render (~120s)
+  const MAX_REINTENTOS = 5;
 
   while (true) {
     intentoTotal++;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-      console.warn(`[ia] ${contexto}: Timeout de ${TIMEOUT_MS / 1000}s alcanzado, abortando socket...`);
+      console.warn(`[ia] ${contexto}: Timeout ${TIMEOUT_MS / 1000}s alcanzado, abortando socket...`);
       controller.abort();
     }, TIMEOUT_MS);
 
@@ -370,7 +308,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Connection': 'close', // fuerza TCP nueva por llamada, evita socket colgado
+          'Connection': 'close', // TCP nuevo por llamada — evita socket congelado por Render
         },
         body: JSON.stringify(params),
         signal: controller.signal,
@@ -378,7 +316,6 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
 
       clearTimeout(timeoutId);
 
-      // Manejar errores HTTP (429, 500, etc.) antes de parsear el body
       if (!res.ok) {
         const errorBody = await res.text().catch(() => '(sin body)');
 
@@ -386,26 +323,22 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
           const retryAfter = res.headers.get('retry-after');
           const esperaMs = retryAfter ? parseFloat(retryAfter) * 1000 : 60000;
           const segundos = Math.ceil(esperaMs / 1000);
-
           console.warn(`[ia] ${contexto}: Rate limit 429 (intento ${intentoTotal}). Esperando ${segundos}s...`);
           await actualizarEstadoDetalle(
             capituloId,
-            `OpenAI alcanzó su límite de velocidad. Esperando ${segundos}s y reintentando...`
+            `OpenAI alcanzó su límite. Esperando ${segundos}s y reintentando...`
           );
           await dormir(esperaMs);
           continue; // reintento ilimitado en 429
         }
 
-        // Cualquier otro error HTTP → error definitivo
         throw new Error(`OpenAI HTTP ${res.status}: ${errorBody.slice(0, 300)}`);
       }
 
       const data = await res.json();
-
       const tokensReales = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0);
       registrarTokens(tokensReales);
 
-      // Adaptar respuesta al mismo formato que usaba el SDK
       return {
         choices: data.choices,
         usage: data.usage,
@@ -414,7 +347,6 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
     } catch (err) {
       clearTimeout(timeoutId);
 
-      // Si ya fue manejado como 429 arriba, no llega aquí
       const esAbortado = err?.name === 'AbortError'
         || err?.message?.includes('aborted')
         || err?.message?.includes('abort');
@@ -426,12 +358,12 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
         || err?.code === 'ECONNREFUSED'
         || err?.code === 'ENOTFOUND';
 
-      if (esRedError && intentoTotal <= MAX_REINTENTOS_TIMEOUT) {
-        const esperaMs = 20000; // 20s entre reintentos (era 30s antes)
-        console.warn(`[ia] ${contexto}: Timeout/error de red (intento ${intentoTotal}/${MAX_REINTENTOS_TIMEOUT}). Esperando ${esperaMs / 1000}s...`);
+      if (esRedError && intentoTotal <= MAX_REINTENTOS) {
+        const esperaMs = 20000;
+        console.warn(`[ia] ${contexto}: Timeout/red (intento ${intentoTotal}/${MAX_REINTENTOS}). Esperando ${esperaMs / 1000}s...`);
         await actualizarEstadoDetalle(
           capituloId,
-          `OpenAI no respondió. Reintentando (${intentoTotal}/${MAX_REINTENTOS_TIMEOUT})...`
+          `OpenAI no respondió. Reintentando (${intentoTotal}/${MAX_REINTENTOS})...`
         );
         await dormir(esperaMs);
         continue;
@@ -467,10 +399,10 @@ Devuelve un JSON con esta estructura exacta:
 }
 
 REGLAS CRÍTICAS:
-- Para "secciones": identifica SOLO las partes que el pastor anuncia explícitamente. Si no hay, devuelve [].
-- Para "parrafos": identifica los cortes naturales de párrafo en TODO el sermón. No pongas más de 80 entradas en total entre parrafos y secciones. Prioriza los cortes más claros e importantes.
-- Las palabras en fragmento_inicio deben ser EXACTAS (carácter por carácter) tal como aparecen en el texto.
-- Responde ÚNICAMENTE con el JSON, sin texto extra, sin markdown.`;
+* Para "secciones": identifica SOLO las partes que el pastor anuncia explícitamente. Si no hay, devuelve [].
+* Para "parrafos": identifica los cortes naturales de párrafo en TODO el sermón. No pongas más de 80 entradas en total entre parrafos y secciones. Prioriza los cortes más claros e importantes.
+* Las palabras en fragmento_inicio deben ser EXACTAS (carácter por carácter) tal como aparecen en el texto.
+* Responde ÚNICAMENTE con el JSON, sin texto extra, sin markdown.`;
 
 async function analizarGlobal(textoCompleto, capituloId = null) {
   console.log(`[ia] Análisis global (${textoCompleto.length} chars)`);
@@ -547,15 +479,12 @@ async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = nu
   );
 
   const contextoResumido = `CONTEXTO DEL SERMÓN:
-- Tema: ${contextoGlobal.tema_central}
-- Tono: ${contextoGlobal.tono}
-- Resumen: ${contextoGlobal.resumen}
-- Instrucciones: ${contextoGlobal.instrucciones_editoriales}`.trim();
+* Tema: ${contextoGlobal.tema_central}
+* Tono: ${contextoGlobal.tono}
+* Resumen: ${contextoGlobal.resumen}
+* Instrucciones: ${contextoGlobal.instrucciones_editoriales}`.trim();
 
-  const userContent = `${contextoResumido}
-
-FRAGMENTO ${chunk.index + 1} DE ${totalChunks}:
-${chunk.contenido}`;
+  const userContent = `${contextoResumido}\n\nFRAGMENTO ${chunk.index + 1} DE ${totalChunks}:\n${chunk.contenido}`;
 
   const response = await llamarOpenAI({
     model: MODELO,
@@ -655,7 +584,6 @@ export async function analizarEstructura(textoCompleto, capituloId = null) {
 export async function analizarSugerencias(textoCompleto, instruccion = null, capituloId = null) {
   const chunks = dividirEnChunks(textoCompleto);
   console.log(`[ia] ${chunks.length} chunks para sugerencias`);
-
   const todasSugerencias = [];
 
   for (let i = 0; i < chunks.length; i++) {
@@ -668,10 +596,7 @@ export async function analizarSugerencias(textoCompleto, instruccion = null, cap
       }
     } catch (err) {
       console.error(`[ia] Chunk ${i + 1} falló definitivamente: ${err.message}. Continuando...`);
-      await actualizarEstadoDetalle(
-        capituloId,
-        `Parte ${i + 1} de ${chunks.length} no pudo procesarse. Continuando con la siguiente...`
-      );
+      await actualizarEstadoDetalle(capituloId, `Parte ${i + 1} de ${chunks.length} no pudo procesarse. Continuando...`);
     }
 
     const validadas = sugerenciasChunk.filter((s) => {
@@ -686,11 +611,7 @@ export async function analizarSugerencias(textoCompleto, instruccion = null, cap
 
     todasSugerencias.push(...validadas);
     console.log(`[ia] Chunk ${i + 1}: ${validadas.length} sugerencias válidas`);
-
-    await actualizarEstadoDetalle(
-      capituloId,
-      `Parte ${i + 1} de ${chunks.length} analizada (${validadas.length} recomendaciones encontradas)...`
-    );
+    await actualizarEstadoDetalle(capituloId, `Parte ${i + 1} de ${chunks.length} analizada (${validadas.length} recomendaciones)...`);
   }
 
   const deduplicadas = deduplicarSugerencias(todasSugerencias);
@@ -714,7 +635,6 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
 
     const chunks = dividirEnChunks(textoCompleto);
     console.log(`[ia] ${chunks.length} chunks para análisis inicial`);
-
     const todasSugerencias = [];
 
     for (let i = 0; i < chunks.length; i++) {
@@ -723,10 +643,7 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
         sugerenciasChunk = await procesarChunk(chunks[i], global, chunks.length, capituloId);
       } catch (err) {
         console.error(`[ia] Chunk ${i + 1}/${chunks.length} falló definitivamente: ${err.message}. Continuando...`);
-        await actualizarEstadoDetalle(
-          capituloId,
-          `Parte ${i + 1} de ${chunks.length} no pudo procesarse. Continuando con la siguiente...`
-        );
+        await actualizarEstadoDetalle(capituloId, `Parte ${i + 1} de ${chunks.length} no pudo procesarse. Continuando...`);
       }
 
       const validadas = sugerenciasChunk.filter((s) => {
@@ -741,7 +658,6 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
 
       todasSugerencias.push(...validadas);
       console.log(`[ia] Chunk ${i + 1}/${chunks.length}: ${validadas.length} sugerencias válidas`);
-
       await actualizarEstadoDetalle(
         capituloId,
         `Redacción revisada: parte ${i + 1} de ${chunks.length} completada (${todasSugerencias.length} recomendaciones hasta ahora)...`
