@@ -288,7 +288,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
-  const TIMEOUT_MS = 90000; // 90s — por debajo del límite de Render (~120s)
+  const TIMEOUT_MS = 110000; // 110s — da margen para respuestas largas sin llegar al límite del proxy de Render
   const MAX_REINTENTOS = 5;
 
   while (true) {
@@ -413,7 +413,7 @@ async function analizarGlobal(textoCompleto, capituloId = null) {
 
   const response = await llamarOpenAI({
     model: MODELO,
-    max_completion_tokens: 8000,
+    max_completion_tokens: 16000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_GLOBAL },
       { role: 'user', content: `Analiza este sermón completo:\n\n${textoCompleto}` },
@@ -488,7 +488,7 @@ async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = nu
 
   const response = await llamarOpenAI({
     model: MODELO,
-    max_completion_tokens: 8000,
+    max_completion_tokens: 16000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_CHUNK },
       { role: 'user', content: userContent },
@@ -554,7 +554,7 @@ async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
 
   const response = await llamarOpenAI({
     model: MODELO,
-    max_completion_tokens: 8000,
+    max_completion_tokens: 16000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_CHUNK },
       {
