@@ -350,7 +350,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
-  const TIMEOUT_MS = 120000; // 90s — por debajo del límite silencioso de Render (~120s)
+  const TIMEOUT_MS = 90000;
   const MAX_REINTENTOS_TIMEOUT = 5;
 
   while (true) {
@@ -370,6 +370,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Connection': 'close', // fuerza TCP nueva por llamada, evita socket colgado
         },
         body: JSON.stringify(params),
         signal: controller.signal,
