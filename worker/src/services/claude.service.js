@@ -288,17 +288,28 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
-  const TIMEOUT_MS = 110000; // 110s — da margen para respuestas largas sin llegar al límite del proxy de Render
+  const TIMEOUT_MS = 100000; // 100s
   const MAX_REINTENTOS = 5;
 
   while (true) {
     intentoTotal++;
 
+    // Usamos AbortSignal.timeout() nativo de Node.js — se ejecuta a nivel de runtime
+    // independiente del event loop, a diferencia de setTimeout que puede bloquearse
+    // cuando el worker está ocupado procesando chunks anteriores.
+    // Además agregamos un setTimeout de respaldo por si acaso.
+    const signal = AbortSignal.timeout(TIMEOUT_MS);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      console.warn(`[ia] ${contexto}: Timeout ${TIMEOUT_MS / 1000}s alcanzado, abortando socket...`);
+    const timeoutRespaldo = setTimeout(() => {
+      console.warn(`[ia] ${contexto}: Timeout respaldo ${TIMEOUT_MS / 1000}s, abortando...`);
       controller.abort();
-    }, TIMEOUT_MS);
+    }, TIMEOUT_MS + 5000); // 5s extra de margen
+
+    // Combinar ambas señales: aborta si cualquiera de las dos dispara
+    signal.addEventListener('abort', () => {
+      console.warn(`[ia] ${contexto}: Timeout nativo ${TIMEOUT_MS / 1000}s alcanzado, abortando socket...`);
+      controller.abort();
+    });
 
     try {
       console.log(`[ia] ${contexto}: enviando request a OpenAI via fetch (intento ${intentoTotal})...`);
@@ -314,7 +325,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutRespaldo);
 
       if (!res.ok) {
         const errorBody = await res.text().catch(() => '(sin body)');
@@ -345,7 +356,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
       };
 
     } catch (err) {
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutRespaldo);
 
       const esAbortado = err?.name === 'AbortError'
         || err?.message?.includes('aborted')
