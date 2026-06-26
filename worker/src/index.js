@@ -46,7 +46,7 @@ app.listen(PORT, () => {
   // Esperar 20s después de que el puerto esté listo antes de procesar jobs.
   // Render necesita este tiempo para terminar de configurar la red saliente.
   // Sin este delay, los requests a OpenAI fallan por timeout silencioso.
-  const DELAY_RED_MS = 20000;
+  const DELAY_RED_MS = 45000; // era 20000, subir a 45s
   console.log(`[worker] Esperando ${DELAY_RED_MS / 1000}s para que la red de Render esté lista...`);
 
   setTimeout(() => {
