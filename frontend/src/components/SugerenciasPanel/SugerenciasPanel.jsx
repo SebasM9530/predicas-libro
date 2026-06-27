@@ -61,6 +61,16 @@ export default function SugerenciasPanel({
     });
   }
 
+  function toggleSeleccionarTodas() {
+    const todasIds = pendientes.map((s) => s.id);
+    const todasSeleccionadas = todasIds.every((id) => seleccionadas.has(id));
+    if (todasSeleccionadas) {
+      setSeleccionadas(new Set());
+    } else {
+      setSeleccionadas(new Set(todasIds));
+    }
+  }
+
   async function handleAplicar() {
     if (seleccionadas.size === 0) return;
     try {
@@ -168,9 +178,20 @@ export default function SugerenciasPanel({
 
       {/* Panel de notas — ocupa el espacio disponible y hace scroll interno */}
       <div className="marginalia">
-        <h3 className="marginalia__header">
-          Notas al margen ({pendientes.length})
-        </h3>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 0 }}>
+          <h3 className="marginalia__header" style={{ marginBottom: 0 }}>
+            Notas al margen ({pendientes.length})
+          </h3>
+          {pendientes.length > 0 && !sugerenciaActiva && (
+            <button
+              className="btn btn--ghost btn--small"
+              onClick={toggleSeleccionarTodas}
+              style={{ fontSize: 11, padding: '3px 10px', whiteSpace: 'nowrap' }}
+            >
+              {pendientes.every((s) => seleccionadas.has(s.id)) ? 'Deseleccionar todo' : 'Seleccionar todo'}
+            </button>
+          )}
+        </div>
 
         {mensaje && <p className="marginalia__notice">{mensaje}</p>}
 
