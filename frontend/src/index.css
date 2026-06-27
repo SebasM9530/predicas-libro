@@ -580,6 +580,14 @@ button { cursor: pointer; font-family: inherit; }
   align-items: start;
 }
 
+/* La columna derecha debe ocupar toda la altura del grid para que
+   position:sticky en .marginalia-wrapper tenga espacio donde deslizarse.
+   Sin esto el sticky queda anclado arriba y no baja con el scroll. */
+.editor-layout > div:last-child {
+  align-self: stretch;
+  position: relative;
+}
+
 @media (max-width: 920px) {
   .editor-layout { grid-template-columns: 1fr; }
 }
@@ -624,17 +632,15 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 /* ---------- Marginalia (sugerencias como notas adhesivas) ---------- */
-/* REEMPLAZA el bloque .marginalia-wrapper existente por este: */
 .marginalia-wrapper {
   position: sticky;
-  top: 16px;
-  height: calc(100vh - 32px); /* altura fija = viewport menos margen */
+  top: 24px;          /* distancia al borde superior de la ventana al scrollear */
+  max-height: calc(100vh - 48px);  /* ocupa casi toda la pantalla sin salirse */
   display: flex;
   flex-direction: column;
   gap: 0;
 }
 
-/* REEMPLAZA el bloque .marginalia existente por este: */
 .marginalia {
   position: relative;
   background-color: rgba(251,245,233,0.06);
@@ -642,16 +648,8 @@ button { cursor: pointer; font-family: inherit; }
   border-radius: var(--radius) var(--radius) 0 0;
   padding: 18px 14px;
   overflow-y: auto;
-  flex: 1;        /* ocupa todo el espacio disponible */
-  min-height: 0;  /* permite que flex shrink funcione */
-}
-
-/* AGREGA este bloque nuevo para el panel de instrucciones: */
-.marginalia--instrucciones {
-  flex: 0 0 auto;          /* altura fija, no crece ni encoge */
-  border-radius: 0 0 var(--radius) var(--radius);
-  border-top: 1px dashed rgba(201,163,92,0.35);
-  overflow-y: visible;
+  flex: 1;
+  min-height: 0;
 }
 
 .marginalia__header {
@@ -772,6 +770,11 @@ button { cursor: pointer; font-family: inherit; }
 }
 .marginalia__apply-bar .btn--primary:hover { background-color: var(--gold-bright); }
 
+.marginalia__instructions {
+  margin: 22px 6px 4px;
+  border-top: 1px dashed rgba(201,163,92,0.35);
+  padding-top: 16px;
+}
 
 .marginalia__instructions h4 {
   font-family: var(--font-display);
