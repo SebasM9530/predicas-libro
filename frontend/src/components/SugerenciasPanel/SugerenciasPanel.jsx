@@ -35,7 +35,18 @@ export default function SugerenciasPanel({
 
   const pendientes = sugerencias.filter((s) => s.estado === 'pendiente' && s.tipo !== 'marcador_seccion');
   const automaticas = pendientes.filter((s) => s.origen === 'automatico');
-  const especificas = pendientes.filter((s) => s.origen === 'instruccion_manual');
+
+  // Filtrar sugerencias de instrucción manual que ya están cubiertas por
+  // una sugerencia automática pendiente con el mismo fragmento_original.
+  // Así evitamos mostrar notas duplicadas cuando el pastor envía instrucciones.
+  const fragmentosAutomaticos = new Set(
+    automaticas.map((s) => s.fragmento_original?.trim()).filter(Boolean)
+  );
+  const especificas = pendientes.filter(
+    (s) =>
+      s.origen === 'instruccion_manual' &&
+      !fragmentosAutomaticos.has(s.fragmento_original?.trim())
+  );
 
   const sugerenciaActiva = sugerenciaActivaId
     ? pendientes.find((s) => s.id === sugerenciaActivaId)
@@ -52,7 +63,6 @@ export default function SugerenciasPanel({
 
   async function handleAplicar() {
     if (seleccionadas.size === 0) return;
-
     try {
       setAplicando(true);
       await aplicarSugerencias(capituloId, Array.from(seleccionadas));
@@ -81,7 +91,6 @@ export default function SugerenciasPanel({
   async function handleEnviarInstruccion(e) {
     e.preventDefault();
     if (!instruccion.trim()) return;
-
     try {
       setEnviandoInstruccion(true);
       setMensaje(null);
@@ -96,9 +105,6 @@ export default function SugerenciasPanel({
     }
   }
 
-  // Clic en una nota del panel: marca como activa Y hace scroll en el
-  // manuscrito hasta el fragmento resaltado correspondiente (lo maneja
-  // CapituloEditor mediante el prop sugerenciaActivaId)
   function handleClickNota(id) {
     onSugerenciaClick?.(id);
   }
@@ -152,8 +158,15 @@ export default function SugerenciasPanel({
   }
 
   return (
+    /*
+     * marginalia-wrapper es sticky: se queda fijo mientras el pastor
+     * hace scroll en el manuscrito. Usa flex column para dividir el
+     * espacio entre el panel de notas (scroll interno) y el panel de
+     * instrucciones (altura fija abajo).
+     */
     <div className="marginalia-wrapper">
-      {/* ---------- Panel de notas (con su propio scroll) ---------- */}
+
+      {/* Panel de notas — ocupa el espacio disponible y hace scroll interno */}
       <div className="marginalia">
         <h3 className="marginalia__header">
           Notas al margen ({pendientes.length})
@@ -163,7 +176,11 @@ export default function SugerenciasPanel({
 
         {sugerenciaActiva ? (
           <>
-            <button className="btn btn--ghost btn--small" onClick={onLimpiarActiva} style={{ marginBottom: 12 }}>
+            <button
+              className="btn btn--ghost btn--small"
+              onClick={onLimpiarActiva}
+              style={{ marginBottom: 12 }}
+            >
               ← Ver todas las notas
             </button>
             {renderNota(sugerenciaActiva)}
@@ -197,14 +214,18 @@ export default function SugerenciasPanel({
 
         {pendientes.length > 0 && !sugerenciaActiva && (
           <div className="marginalia__apply-bar">
-            <button className="btn btn--primary" onClick={handleAplicar} disabled={aplicando || seleccionadas.size === 0}>
+            <button
+              className="btn btn--primary"
+              onClick={handleAplicar}
+              disabled={aplicando || seleccionadas.size === 0}
+            >
               {aplicando ? 'Aplicando...' : `Aplicar seleccionados (${seleccionadas.size})`}
             </button>
           </div>
         )}
       </div>
 
-      {/* ---------- Panel de instrucciones, SEPARADO y fijo debajo ---------- */}
+      {/* Panel de instrucciones — altura fija, siempre visible abajo */}
       <div className="marginalia marginalia--instrucciones">
         <h4 className="marginalia__instructions-title">Instrucciones generales</h4>
         <p className="marginalia__instructions-hint">
@@ -219,7 +240,11 @@ export default function SugerenciasPanel({
               disabled={!!trabajoId}
             />
           </div>
-          <button className="btn btn--primary" type="submit" disabled={enviandoInstruccion || !!trabajoId || !instruccion.trim()}>
+          <button
+            className="btn btn--primary"
+            type="submit"
+            disabled={enviandoInstruccion || !!trabajoId || !instruccion.trim()}
+          >
             {enviandoInstruccion ? 'Enviando...' : 'Generar notas'}
           </button>
         </form>
