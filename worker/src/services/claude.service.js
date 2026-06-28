@@ -1,7 +1,7 @@
 /**
  * claude.service.js
  *
- * Modelo: gpt-5-mini (OpenAI)
+ * Modelo: gpt-4o-mini (OpenAI)
  * Estrategia: análisis global liviano → chunks secuenciales para sugerencias
  *
  * IMPORTANTE: Usa node-fetch directamente en vez del SDK de OpenAI.
@@ -20,14 +20,14 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
-const MODELO = 'gpt-5-mini';
+const MODELO = 'gpt-4o-mini';
 const CHUNK_CHARS = 5000;
 
 // ─────────────────────────────────────────────────────────────
 // Control de TPM (tokens por minuto) — ventana deslizante
 // ─────────────────────────────────────────────────────────────
 
-const TPM_LIMITE = 450000; // conservador: usamos 450k de los 500k disponibles
+const TPM_LIMITE = 450000;
 const VENTANA_MS = 60000;
 const historialTokens = [];
 
@@ -143,27 +143,30 @@ function repararJSONTruncado(jsonTexto) {
   return null;
 }
 
+/**
+ * Parsea el JSON de respuesta de OpenAI.
+ * Retorna { data, truncado } para que el caller sepa si el JSON vino cortado
+ * y pueda decidir si reintentar en vez de aceptar un resultado parcial.
+ */
 function parsearJSON(texto, contexto) {
   const jsonLimpio = limpiarRespuestaJSON(texto);
 
   if (!jsonLimpio) {
-    console.warn(`[ia] Respuesta vacía en "${contexto}", intentando reparar...`);
-    const reparado = repararJSONTruncado(texto.trim());
-    if (reparado && Object.keys(reparado).length > 0) return reparado;
-    if (contexto === 'global') return fallbackGlobal();
-    return {};
+    console.warn(`[ia] Respuesta vacía en "${contexto}"`);
+    if (contexto === 'global') return { data: fallbackGlobal(), truncado: false };
+    return { data: {}, truncado: false };
   }
 
   try {
-    return JSON.parse(jsonLimpio);
+    return { data: JSON.parse(jsonLimpio), truncado: false };
   } catch (err) {
     console.warn(`[ia] JSON truncado en "${contexto}", intentando reparar...`);
     const reparado = repararJSONTruncado(jsonLimpio);
     if (reparado && Object.keys(reparado).length > 0) {
-      console.warn(`[ia] JSON reparado para "${contexto}"`);
-      return reparado;
+      console.warn(`[ia] JSON reparado para "${contexto}" — resultado parcial, se reintentará`);
+      return { data: reparado, truncado: true }; // ← marcamos como truncado
     }
-    if (contexto === 'global') return fallbackGlobal();
+    if (contexto === 'global') return { data: fallbackGlobal(), truncado: false };
     throw new Error(
       `No se pudo parsear JSON (${contexto}): ${err.message}\n` +
       `Respuesta (primeros 400 chars): ${jsonLimpio.slice(0, 400)}`
@@ -269,16 +272,20 @@ function deduplicarSugerencias(sugerencias) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Llamada a OpenAI con node-fetch directo + Connection: close
+// Llamada a OpenAI con node-fetch directo
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Por qué node-fetch + Connection: close:
- * - El SDK de OpenAI usa undici internamente. Su AbortController NO termina
- *   la conexión TCP en Linux/Render free tier → cuelgue silencioso infinito.
- * - node-fetch propaga el abort al socket directamente → timeout real.
- * - Connection: close fuerza TCP nuevo por llamada → evita reutilizar
- *   sockets que Render puede haber congelado silenciosamente.
+ * FIX 1 — AbortController limpio por llamada:
+ * El AbortSignal.timeout() anterior no se cancelaba al terminar exitosamente,
+ * quedaba corriendo 300s en background y llenaba los logs con timeouts fantasma
+ * de llamadas que ya habían completado. Ahora usamos solo un setTimeout + clearTimeout.
+ *
+ * FIX 2 — Detección de JSON truncado:
+ * parsearJSON ahora retorna { data, truncado }. Cuando el JSON viene cortado
+ * (output_tokens == max_completion_tokens), llamarOpenAI lanza un error especial
+ * para que el caller pueda reintentar el chunk completo en vez de aceptar
+ * un resultado parcial con pocas sugerencias.
  */
 async function llamarOpenAI(params, contexto, capituloId = null) {
   const tokensEstimados = Math.ceil(
@@ -288,44 +295,34 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
   await esperarSiNecesario(tokensEstimados, contexto, capituloId);
 
   let intentoTotal = 0;
-  const TIMEOUT_MS = 300000; // 100s
+  const TIMEOUT_MS = 300000; // 5 min — sin proxy de Render en Background Worker
   const MAX_REINTENTOS = 5;
 
   while (true) {
     intentoTotal++;
 
-    // Usamos AbortSignal.timeout() nativo de Node.js — se ejecuta a nivel de runtime
-    // independiente del event loop, a diferencia de setTimeout que puede bloquearse
-    // cuando el worker está ocupado procesando chunks anteriores.
-    // Además agregamos un setTimeout de respaldo por si acaso.
-    const signal = AbortSignal.timeout(TIMEOUT_MS);
+    // Un solo controller por intento — se cancela con clearTimeout si la llamada termina
     const controller = new AbortController();
-    const timeoutRespaldo = setTimeout(() => {
-      console.warn(`[ia] ${contexto}: Timeout respaldo ${TIMEOUT_MS / 1000}s, abortando...`);
+    const timeoutId = setTimeout(() => {
+      console.warn(`[ia] ${contexto}: Timeout ${TIMEOUT_MS / 1000}s alcanzado, abortando socket...`);
       controller.abort();
-    }, TIMEOUT_MS + 5000); // 5s extra de margen
-
-    // Combinar ambas señales: aborta si cualquiera de las dos dispara
-    signal.addEventListener('abort', () => {
-      console.warn(`[ia] ${contexto}: Timeout nativo ${TIMEOUT_MS / 1000}s alcanzado, abortando socket...`);
-      controller.abort();
-    });
+    }, TIMEOUT_MS);
 
     try {
-      console.log(`[ia] ${contexto}: enviando request a OpenAI via fetch (intento ${intentoTotal})...`);
+      console.log(`[ia] ${contexto}: enviando request a OpenAI (intento ${intentoTotal})...`);
 
       const res = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Connection': 'close', // TCP nuevo por llamada — evita socket congelado por Render
+          'Connection': 'close',
         },
         body: JSON.stringify(params),
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutRespaldo);
+      clearTimeout(timeoutId); // ← cancelar siempre al terminar, éxito o error HTTP
 
       if (!res.ok) {
         const errorBody = await res.text().catch(() => '(sin body)');
@@ -340,7 +337,7 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
             `OpenAI alcanzó su límite. Esperando ${segundos}s y reintentando...`
           );
           await dormir(esperaMs);
-          continue; // reintento ilimitado en 429
+          continue;
         }
 
         throw new Error(`OpenAI HTTP ${res.status}: ${errorBody.slice(0, 300)}`);
@@ -350,13 +347,21 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
       const tokensReales = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0);
       registrarTokens(tokensReales);
 
+      const outputTokens = data.usage?.completion_tokens || 0;
+      const maxTokens = params.max_completion_tokens || 8000;
+
+      // Detectar respuesta cortada: si OpenAI usó exactamente el máximo de tokens,
+      // es casi seguro que el JSON quedó truncado
+      const probablementeTruncado = outputTokens >= maxTokens - 10;
+
       return {
         choices: data.choices,
         usage: data.usage,
+        probablementeTruncado,
       };
 
     } catch (err) {
-      clearTimeout(timeoutRespaldo);
+      clearTimeout(timeoutId);
 
       const esAbortado = err?.name === 'AbortError'
         || err?.message?.includes('aborted')
@@ -384,6 +389,38 @@ async function llamarOpenAI(params, contexto, capituloId = null) {
       throw err;
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Procesador de chunks con reintento en JSON truncado
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Procesa un chunk y reintenta si el JSON vino truncado.
+ * Si en el reintento también viene truncado, acepta el resultado parcial
+ * para no bloquear el proceso completo.
+ */
+async function procesarChunkConReintento(fnChunk, contexto, capituloId, maxReintentosTruncado = 2) {
+  for (let intento = 1; intento <= maxReintentosTruncado; intento++) {
+    const { sugerencias, truncado } = await fnChunk();
+
+    if (!truncado) return sugerencias;
+
+    if (intento < maxReintentosTruncado) {
+      console.warn(`[ia] ${contexto}: JSON truncado (intento ${intento}/${maxReintentosTruncado}), reintentando chunk completo...`);
+      await actualizarEstadoDetalle(
+        capituloId,
+        `Respuesta incompleta de OpenAI, reintentando análisis...`
+      );
+      await dormir(5000);
+    } else {
+      console.warn(`[ia] ${contexto}: JSON truncado tras ${maxReintentosTruncado} intentos, aceptando resultado parcial`);
+    }
+  }
+
+  // Último intento — acepta lo que haya
+  const { sugerencias } = await fnChunk();
+  return sugerencias;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -434,7 +471,8 @@ async function analizarGlobal(textoCompleto, capituloId = null) {
   const texto = response.choices?.[0]?.message?.content || '';
   console.log(`[ia] Global — tokens: input=${response.usage?.prompt_tokens} output=${response.usage?.completion_tokens}`);
 
-  return parsearJSON(texto, 'global');
+  const { data } = parsearJSON(texto, 'global');
+  return data;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -486,7 +524,7 @@ async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = nu
   console.log(`[ia] Chunk ${chunk.index + 1}/${totalChunks} (${chunk.contenido.length} chars)`);
   await actualizarEstadoDetalle(
     capituloId,
-    `Generando recomendaciones: parte ${chunk.index + 1} de ${totalChunks} (GPT-5 mini)...`
+    `Generando recomendaciones: parte ${chunk.index + 1} de ${totalChunks}...`
   );
 
   const contextoResumido = `CONTEXTO DEL SERMÓN:
@@ -510,8 +548,9 @@ async function procesarChunk(chunk, contextoGlobal, totalChunks, capituloId = nu
   const tokens = response.usage;
   console.log(`[ia] Chunk ${chunk.index + 1} — tokens: input=${tokens?.prompt_tokens} output=${tokens?.completion_tokens}`);
 
-  const data = parsearJSON(texto, `chunk-${chunk.index + 1}`);
-  return Array.isArray(data.sugerencias) ? data.sugerencias : [];
+  const { data, truncado } = parsearJSON(texto, `chunk-${chunk.index + 1}`);
+  const sugerencias = Array.isArray(data.sugerencias) ? data.sugerencias : [];
+  return { sugerencias, truncado: truncado || response.probablementeTruncado };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -553,8 +592,9 @@ async function procesarChunkConInstruccion(chunk, instruccion, totalChunks, capi
   }, `instruccion-chunk-${chunk.index + 1}`, capituloId);
 
   const texto = response.choices?.[0]?.message?.content || '';
-  const data = parsearJSON(texto, `instruccion-chunk-${chunk.index + 1}`);
-  return Array.isArray(data.sugerencias) ? data.sugerencias : [];
+  const { data, truncado } = parsearJSON(texto, `instruccion-chunk-${chunk.index + 1}`);
+  const sugerencias = Array.isArray(data.sugerencias) ? data.sugerencias : [];
+  return { sugerencias, truncado: truncado || response.probablementeTruncado };
 }
 
 async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
@@ -576,8 +616,9 @@ async function procesarChunkSinContexto(chunk, totalChunks, capituloId = null) {
   }, `chunk-sin-contexto-${chunk.index + 1}`, capituloId);
 
   const texto = response.choices?.[0]?.message?.content || '';
-  const data = parsearJSON(texto, `chunk-${chunk.index + 1}`);
-  return Array.isArray(data.sugerencias) ? data.sugerencias : [];
+  const { data, truncado } = parsearJSON(texto, `chunk-${chunk.index + 1}`);
+  const sugerencias = Array.isArray(data.sugerencias) ? data.sugerencias : [];
+  return { sugerencias, truncado: truncado || response.probablementeTruncado };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -601,9 +642,17 @@ export async function analizarSugerencias(textoCompleto, instruccion = null, cap
     let sugerenciasChunk = [];
     try {
       if (instruccion) {
-        sugerenciasChunk = await procesarChunkConInstruccion(chunks[i], instruccion, chunks.length, capituloId);
+        sugerenciasChunk = await procesarChunkConReintento(
+          () => procesarChunkConInstruccion(chunks[i], instruccion, chunks.length, capituloId),
+          `instruccion-chunk-${i + 1}`,
+          capituloId
+        );
       } else {
-        sugerenciasChunk = await procesarChunkSinContexto(chunks[i], chunks.length, capituloId);
+        sugerenciasChunk = await procesarChunkConReintento(
+          () => procesarChunkSinContexto(chunks[i], chunks.length, capituloId),
+          `chunk-${i + 1}`,
+          capituloId
+        );
       }
     } catch (err) {
       console.error(`[ia] Chunk ${i + 1} falló definitivamente: ${err.message}. Continuando...`);
@@ -651,7 +700,11 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
     for (let i = 0; i < chunks.length; i++) {
       let sugerenciasChunk = [];
       try {
-        sugerenciasChunk = await procesarChunk(chunks[i], global, chunks.length, capituloId);
+        sugerenciasChunk = await procesarChunkConReintento(
+          () => procesarChunk(chunks[i], global, chunks.length, capituloId),
+          `chunk-${i + 1}`,
+          capituloId
+        );
       } catch (err) {
         console.error(`[ia] Chunk ${i + 1}/${chunks.length} falló definitivamente: ${err.message}. Continuando...`);
         await actualizarEstadoDetalle(capituloId, `Parte ${i + 1} de ${chunks.length} no pudo procesarse. Continuando...`);
@@ -692,7 +745,11 @@ export async function analizarTexto(textoCompleto, instruccionAdicional = null, 
   for (let i = 0; i < chunks.length; i++) {
     let sug = [];
     try {
-      sug = await procesarChunkConInstruccion(chunks[i], instruccionAdicional, chunks.length, capituloId);
+      sug = await procesarChunkConReintento(
+        () => procesarChunkConInstruccion(chunks[i], instruccionAdicional, chunks.length, capituloId),
+        `instruccion-chunk-${i + 1}`,
+        capituloId
+      );
     } catch (err) {
       console.error(`[ia] Instrucción chunk ${i + 1} falló: ${err.message}. Continuando...`);
     }
