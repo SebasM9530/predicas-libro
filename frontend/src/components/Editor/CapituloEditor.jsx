@@ -252,8 +252,6 @@ export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActiva
       if (targetSug) {
         const id = targetSug.getAttribute('data-sugerencia-id');
         onSugerenciaClick?.(id);
-        // Subir la página hasta arriba para que se vea el panel de notas
-        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     };
 

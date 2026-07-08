@@ -581,7 +581,7 @@ async function procesarChunkConInstruccion(chunk, instruccion, totalChunks, capi
 
   const response = await llamarOpenAI({
     model: MODELO,
-    max_completion_tokens: 8000,
+    max_completion_tokens: 16000,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT_INSTRUCCION },
       {
