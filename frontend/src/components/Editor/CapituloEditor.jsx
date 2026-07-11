@@ -1,21 +1,18 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import Bold from '@tiptap/extension-bold';
+import Italic from '@tiptap/extension-italic';
+import TextStyle from '@tiptap/extension-text-style';
 import { SugerenciaMark, SeccionMark } from './SugerenciaMark';
 import { actualizarTextoCapitulo } from '../../services/api';
 
 const AUTOSAVE_DEBOUNCE_MS = 3000;
 const AUTOSAVE_FORZADO_MS = 30000;
 
-/**
- * Normaliza espacios en blanco de la misma forma en que Tiptap los
- * normaliza internamente al renderizar HTML: colapsa espacios/tabs
- * múltiples a uno solo y quita saltos de línea sueltos dentro de un
- * párrafo. Aplicar esta MISMA normalización tanto al texto guardado
- * en BD como al fragmento_original de cada sugerencia antes de
- * buscarlo evita que pequeñas diferencias de espacios rompan el
- * resaltado.
- */
+// Tamaños disponibles para el selector
+const TAMANOS = ['12px', '14px', '16px', '18px', '20px', '24px'];
+
 function normalizarEspacios(texto) {
   if (!texto) return '';
   return texto.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
@@ -52,40 +49,24 @@ function mapearPosicionTexto(editor, desde, hasta) {
   return { from, to };
 }
 
-/**
- * Busca fragmento dentro de textoPlano. Primero intenta una búsqueda
- * exacta; si falla, reintenta con ambos textos normalizados (espacios
- * colapsados), mapeando el índice encontrado de vuelta a la posición
- * real en textoPlano (sin normalizar) para que mapearPosicionTexto
- * siga funcionando correctamente con el documento real de Tiptap.
- */
 function buscarFragmentoTolerante(textoPlano, fragmento) {
   if (!fragmento) return -1;
 
-  // 1. Intento exacto
   let idx = textoPlano.indexOf(fragmento);
   if (idx !== -1) return idx;
 
-  // 2. Intento normalizando espacios en el fragmento buscado, pero
-  // todavía buscando dentro del texto plano SIN normalizar (cubre el
-  // caso de espacios dobles o tabs distintos dentro del fragmento)
   const fragmentoNormalizado = fragmento.replace(/\s+/g, ' ').trim();
   const textoColapsado = textoPlano.replace(/\s+/g, ' ');
   const idxColapsado = textoColapsado.indexOf(fragmentoNormalizado);
 
   if (idxColapsado === -1) return -1;
 
-  // Mapear la posición encontrada en el texto colapsado de vuelta a
-  // la posición real en textoPlano, contando caracteres reales
-  // mientras avanzamos en paralelo por ambas cadenas.
   let posReal = 0;
   let posColapsada = 0;
 
   while (posColapsada < idxColapsado && posReal < textoPlano.length) {
     const esEspacio = /\s/.test(textoPlano[posReal]);
     if (esEspacio) {
-      // Saltar todos los espacios consecutivos en el texto real,
-      // cuentan como un solo espacio en el colapsado
       while (posReal < textoPlano.length && /\s/.test(textoPlano[posReal])) {
         posReal++;
       }
@@ -106,31 +87,19 @@ function aplicarMarcas(editor, sugerencias) {
 
   const textoPlano = editor.getText();
 
-  // 1. Resaltados de sugerencias pendientes
   for (const sug of sugerencias) {
     if (sug.estado !== 'pendiente') continue;
     if (sug.tipo === 'marcador_seccion') continue;
     if (!sug.fragmento_original) continue;
 
     const idx = buscarFragmentoTolerante(textoPlano, sug.fragmento_original);
-
     if (idx === -1) {
-      console.warn(
-        '[editor] No se pudo resaltar una sugerencia: el fragmento no se encontró en el texto actual.',
-        { id: sug.id, tipo: sug.tipo, fragmento: sug.fragmento_original }
-      );
+      console.warn('[editor] Fragmento no encontrado:', sug.fragmento_original?.slice(0, 60));
       continue;
     }
 
     const { from, to } = mapearPosicionTexto(editor, idx, idx + sug.fragmento_original.length);
-
-    if (from == null || to == null) {
-      console.warn(
-        '[editor] El fragmento se localizó en el texto pero no se pudo mapear a una posición del editor.',
-        { id: sug.id, tipo: sug.tipo, fragmento: sug.fragmento_original }
-      );
-      continue;
-    }
+    if (from == null || to == null) continue;
 
     editor
       .chain()
@@ -139,7 +108,6 @@ function aplicarMarcas(editor, sugerencias) {
       .run();
   }
 
-  // 2. Marcadores de sección (solo marca las primeras 2 palabras)
   for (const sec of sugerencias) {
     if (sec.tipo !== 'marcador_seccion') continue;
     if (!sec.fragmento_original) continue;
@@ -162,41 +130,183 @@ function aplicarMarcas(editor, sugerencias) {
 }
 
 /**
- * Hace scroll suave hasta el primer elemento con data-sugerencia-id
- * correspondiente, centrándolo en la pantalla.
+ * Hace scroll hasta la marca y lanza un efecto de destello dorado
+ * durante 1.5 segundos para que sea fácil identificarla entre todos
+ * los resaltados.
  */
 function scrollHastaMarcaEnTexto(sugerenciaId) {
   requestAnimationFrame(() => {
     const el = document.querySelector(`mark[data-sugerencia-id="${sugerenciaId}"]`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Efecto destello: añadir clase y quitarla después de 1.5s
+      el.classList.add('mark--destello');
+      setTimeout(() => el.classList.remove('mark--destello'), 1500);
     }
   });
 }
 
+/**
+ * Extrae el HTML limpio del editor (sin las marcas de sugerencia/sección
+ * que son solo visuales) para guardarlo en la BD con el formato real
+ * (negrilla, cursiva, tamaño de texto).
+ */
+function extraerHtmlParaGuardar(editor) {
+  // Obtener el HTML del editor
+  const html = editor.getHTML();
+
+  // Limpiar las marcas visuales de sugerencias y secciones antes de guardar
+  const div = document.createElement('div');
+  div.innerHTML = html;
+
+  // Quitar marks de sugerencia (reemplazar por su contenido de texto)
+  div.querySelectorAll('mark[data-sugerencia-id]').forEach((mark) => {
+    const span = document.createElement('span');
+    span.innerHTML = mark.innerHTML;
+    mark.replaceWith(span);
+  });
+
+  // Quitar spans de sección (reemplazar por su contenido de texto)
+  div.querySelectorAll('span[data-seccion-id]').forEach((span) => {
+    const inner = document.createElement('span');
+    inner.innerHTML = span.innerHTML;
+    span.replaceWith(inner);
+  });
+
+  return div.innerHTML;
+}
+
+/**
+ * Convierte texto plano (guardado antes de este cambio) a HTML básico.
+ * Si el texto ya es HTML (contiene etiquetas), lo devuelve tal cual.
+ */
+function textoAHtml(texto) {
+  if (!texto) return '<p></p>';
+
+  // Si ya tiene etiquetas HTML, es el nuevo formato — devolver tal cual
+  if (/<[a-z][\s\S]*>/i.test(texto)) return texto;
+
+  // Si es texto plano (formato antiguo), convertir párrafos a <p>
+  return texto
+    .split(/\n\n+/)
+    .map((parrafo) => `<p>${escapeHtml(normalizarEspacios(parrafo))}</p>`)
+    .join('');
+}
+
+function escapeHtml(texto) {
+  return texto
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Barra de herramientas de formato
+// ─────────────────────────────────────────────────────────────
+
+function BarraFormato({ editor }) {
+  const [tamanoActual, setTamanoActual] = useState('17px');
+
+  useEffect(() => {
+    if (!editor) return;
+    const actualizar = () => {
+      const attrs = editor.getAttributes('textStyle');
+      setTamanoActual(attrs.fontSize || '17px');
+    };
+    editor.on('selectionUpdate', actualizar);
+    editor.on('transaction', actualizar);
+    return () => {
+      editor.off('selectionUpdate', actualizar);
+      editor.off('transaction', actualizar);
+    };
+  }, [editor]);
+
+  if (!editor) return null;
+
+  return (
+    <div className="editor-toolbar">
+      <button
+        className={`editor-toolbar__btn ${editor.isActive('bold') ? 'editor-toolbar__btn--active' : ''}`}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          editor.chain().focus().toggleBold().run();
+        }}
+        title="Negrilla (Ctrl+B)"
+      >
+        <strong>B</strong>
+      </button>
+
+      <button
+        className={`editor-toolbar__btn ${editor.isActive('italic') ? 'editor-toolbar__btn--active' : ''}`}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          editor.chain().focus().toggleItalic().run();
+        }}
+        title="Cursiva (Ctrl+I)"
+      >
+        <em>I</em>
+      </button>
+
+      <div className="editor-toolbar__separator" />
+
+      <select
+        className="editor-toolbar__select"
+        value={tamanoActual}
+        onChange={(e) => {
+          editor.chain().focus().setMark('textStyle', { fontSize: e.target.value }).run();
+          setTamanoActual(e.target.value);
+        }}
+        title="Tamaño de texto"
+      >
+        <option value="12px">12px</option>
+        <option value="14px">14px</option>
+        <option value="17px">17px (Normal)</option>
+        <option value="18px">18px</option>
+        <option value="20px">20px</option>
+        <option value="24px">24px</option>
+      </select>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Componente principal
+// ─────────────────────────────────────────────────────────────
+
 export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActivaId, onSugerenciaClick, onTextoChange }) {
   const autosaveTimeoutRef = useRef(null);
   const autosaveForzadoRef = useRef(null);
-  const ultimoTextoCargadoRef = useRef(capitulo.texto_actual || '');
+  const ultimoHtmlGuardadoRef = useRef(capitulo.texto_actual || '');
   const editorRef = useRef(null);
 
   function guardarTexto(editorInstance) {
     if (!editorInstance || editorInstance.isDestroyed) return;
-    const texto = editorInstance.getText();
-    actualizarTextoCapitulo(capitulo.id, texto)
+    const html = extraerHtmlParaGuardar(editorInstance);
+    actualizarTextoCapitulo(capitulo.id, html)
       .then(() => {
-        ultimoTextoCargadoRef.current = texto;
+        ultimoHtmlGuardadoRef.current = html;
+        // Notificar al padre con el texto plano (para otros usos)
+        onTextoChange?.(editorInstance.getText());
       })
       .catch((err) => console.error('Error en autosave:', err));
   }
 
   const editor = useEditor({
-    extensions: [StarterKit, SugerenciaMark, SeccionMark],
+    extensions: [
+      StarterKit.configure({
+        // Bold e Italic los manejamos por separado para tener control total
+        bold: false,
+        italic: false,
+      }),
+      Bold,
+      Italic,
+      TextStyle.configure({ types: ['textStyle'] }),
+      SugerenciaMark,
+      SeccionMark,
+    ],
     content: textoAHtml(capitulo.texto_actual || ''),
     onUpdate: ({ editor: ed }) => {
-      const texto = ed.getText();
-      onTextoChange?.(texto);
-
       // Debounce: guarda 3s después de dejar de escribir
       if (autosaveTimeoutRef.current) clearTimeout(autosaveTimeoutRef.current);
       autosaveTimeoutRef.current = setTimeout(() => {
@@ -205,7 +315,6 @@ export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActiva
     },
   });
 
-  // Guardar referencia del editor para el autosave forzado
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
@@ -222,15 +331,14 @@ export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActiva
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor]);
 
-  // Recargar contenido si el texto cambió externamente (ej. tras aplicar sugerencias)
-  // pero NO pisar ediciones manuales que aún no se guardaron
+  // Recargar contenido si el texto cambió externamente
   useEffect(() => {
     if (!editor) return;
-    const nuevoTexto = capitulo.texto_actual || '';
+    const nuevoHtml = textoAHtml(capitulo.texto_actual || '');
 
-    if (nuevoTexto !== ultimoTextoCargadoRef.current) {
-      editor.commands.setContent(textoAHtml(nuevoTexto));
-      ultimoTextoCargadoRef.current = nuevoTexto;
+    if (capitulo.texto_actual !== ultimoHtmlGuardadoRef.current) {
+      editor.commands.setContent(nuevoHtml);
+      ultimoHtmlGuardadoRef.current = capitulo.texto_actual || '';
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [capitulo.texto_actual, editor]);
@@ -242,8 +350,7 @@ export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActiva
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, sugerencias, capitulo.texto_actual]);
 
-  // Clic en fragmento resaltado del manuscrito → filtrar panel a esa
-  // sugerencia Y hacer scroll de la página hacia ARRIBA (donde está el panel)
+  // Clic en fragmento resaltado → mostrar solo esa nota en el panel
   useEffect(() => {
     if (!editor) return;
 
@@ -260,14 +367,12 @@ export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActiva
     return () => dom.removeEventListener('click', handleClick);
   }, [editor, onSugerenciaClick]);
 
-  // Cuando se activa una sugerencia (clic en la nota del panel), hacer
-  // scroll en el manuscrito hasta el fragmento resaltado correspondiente
+  // Clic en nota del panel → scroll hasta la marca + efecto destello
   useEffect(() => {
     if (!sugerenciaActivaId) return;
     scrollHastaMarcaEnTexto(sugerenciaActivaId);
   }, [sugerenciaActivaId]);
 
-  // Cleanup al desmontar
   useEffect(() => {
     return () => {
       if (autosaveTimeoutRef.current) clearTimeout(autosaveTimeoutRef.current);
@@ -277,22 +382,8 @@ export default function CapituloEditor({ capitulo, sugerencias, sugerenciaActiva
 
   return (
     <div className="manuscript-page">
+      <BarraFormato editor={editor} />
       <EditorContent editor={editor} />
     </div>
   );
 }
-
-function textoAHtml(texto) {
-  if (!texto) return '<p></p>';
-  return texto
-    .split(/\n\n+/)
-    .map((parrafo) => `<p>${escapeHtml(normalizarEspacios(parrafo))}</p>`)
-    .join('');
-}
-
-function escapeHtml(texto) {
-  return texto
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-} 

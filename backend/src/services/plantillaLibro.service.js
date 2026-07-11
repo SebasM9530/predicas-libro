@@ -224,6 +224,16 @@ export function generarHtmlLibro({ capitulos, config }) {
 
 function parrafosHtml(texto) {
   if (!texto) return '';
+
+  // Formato nuevo: el texto ya es HTML con <p>, <strong>, <em>, <span>
+  // Solo limpiar las marcas visuales de sugerencias/secciones
+  if (/<p[\s>]/i.test(texto)) {
+    return texto
+      .replace(/<mark[^>]*>([\s\S]*?)<\/mark>/gi, '$1')
+      .replace(/<span[^>]*data-seccion-id[^>]*>([\s\S]*?)<\/span>/gi, '$1');
+  }
+
+  // Formato antiguo: texto plano → convertir a párrafos HTML
   return texto
     .split(/\n\n+/)
     .filter((p) => p.trim())

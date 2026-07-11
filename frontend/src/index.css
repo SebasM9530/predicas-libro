@@ -955,3 +955,85 @@ button { cursor: pointer; font-family: inherit; }
   outline: 1px solid rgba(201,163,92,0.5);
   outline-offset: 1px;
 }
+
+/* ---------- Barra de herramientas del editor ---------- */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background-color: var(--page-deep);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.editor-toolbar__btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background-color: #fff;
+  color: var(--ink);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+
+.editor-toolbar__btn:hover {
+  background-color: var(--gold-soft);
+  border-color: var(--gold);
+}
+
+.editor-toolbar__btn--active {
+  background-color: var(--gold-soft);
+  border-color: var(--gold);
+  color: var(--cover);
+}
+
+.editor-toolbar__separator {
+  width: 1px;
+  height: 24px;
+  background-color: var(--line);
+  margin: 0 4px;
+}
+
+.editor-toolbar__select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background-color: #fff;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.editor-toolbar__select:focus {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+
+/* ---------- Efecto destello al navegar desde una sticky note ---------- */
+@keyframes destello {
+  0%   { background-color: #F3E6C8; box-shadow: none; }
+  25%  { background-color: #C9A35C; box-shadow: 0 0 12px 4px rgba(201,163,92,0.7); }
+  50%  { background-color: #ECD8A8; box-shadow: 0 0 20px 6px rgba(201,163,92,0.5); }
+  75%  { background-color: #C9A35C; box-shadow: 0 0 12px 4px rgba(201,163,92,0.7); }
+  100% { background-color: #F3E6C8; box-shadow: none; }
+}
+
+.mark--destello {
+  animation: destello 1.5s ease-in-out;
+  border-radius: 3px;
+}
+
+/* Soporte de negrilla e italica dentro del manuscrito */
+.manuscript-page .ProseMirror strong { font-weight: 700; }
+.manuscript-page .ProseMirror em { font-style: italic; }

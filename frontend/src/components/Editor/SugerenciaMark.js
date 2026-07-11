@@ -3,6 +3,12 @@ import { Mark } from '@tiptap/core';
 export const SugerenciaMark = Mark.create({
   name: 'sugerencia',
 
+  // inclusive: false → el texto nuevo que se escribe justo después
+  // del mark NO hereda el resaltado. Resuelve el bug de que al
+  // escribir sobre texto subrayado el nuevo texto también quedaba
+  // resaltado.
+  inclusive: false,
+
   addAttributes() {
     return {
       sugerenciaId: {
@@ -29,17 +35,22 @@ export const SugerenciaMark = Mark.create({
   },
 
   renderHTML({ HTMLAttributes }) {
-    return ['mark', { ...HTMLAttributes, style: 'background-color: #F3E6C8; border-bottom: 2px solid #C9A35C; border-radius: 2px;' }, 0];
+    return [
+      'mark',
+      {
+        ...HTMLAttributes,
+        style:
+          'background-color: #F3E6C8; border-bottom: 2px solid #C9A35C; border-radius: 2px;',
+      },
+      0,
+    ];
   },
 });
 
-/**
- * Nodo decorativo (no-mark) para marcar el INICIO de una sección del
- * sermón. Se inserta como un pequeño elemento de tipo "etiqueta" antes
- * del párrafo correspondiente, sin resaltar el texto.
- */
 export const SeccionMark = Mark.create({
   name: 'seccionInicio',
+
+  inclusive: false,
 
   addAttributes() {
     return {

@@ -200,7 +200,7 @@ export default function Dashboard() {
           <div className="chapter-list">
             {capitulos.map((cap, i) => (
               <Link to={`/capitulos/${cap.id}`} key={cap.id} className="chapter-card">
-                <span className="chapter-card__num">{String(i + 1).padStart(2, '0')}</span>
+                <span className="chapter-card__num">{String(capitulos.length - i).padStart(2, '0')}</span>
                 <div className="chapter-card__body">
                   <div className="chapter-card__title">
                     {cap.titulo || `Sermón del ${cap.fecha_sermon}`}
