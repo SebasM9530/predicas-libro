@@ -1,3 +1,4 @@
+import CapituloEditorComponent, { BarraFormato } from '../components/Editor/CapituloEditor';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
@@ -37,6 +38,7 @@ export default function CapituloEditorPage() {
   const [cargando, setCargando] = useState(true);
   const [sugerenciaActivaId, setSugerenciaActivaId] = useState(null);
 
+  const [editorActivo, setEditorActivo] = useState(null); 
   const [titulo, setTitulo] = useState('');
   const [fecha, setFecha] = useState('');
   const [editando, setEditando] = useState(false);
@@ -295,13 +297,17 @@ export default function CapituloEditorPage() {
             sugerenciaActivaId={sugerenciaActivaId}
             onSugerenciaClick={handleSeleccionarSugerencia}
             onTextoChange={() => {}}
+            onEditorReady={setEditorActivo}
           />
 
           <div>
+            {/* Barra de formato sticky en el panel derecho */}
+            <BarraFormato editor={editorActivo} />
+
             {analizando && (
               <div className="panel">
                 <span className="panel__ribbon panel__ribbon--slate"></span>
-                <p><span className="spinner"></span>Analizando el texto con IA, las notas aparecerán pronto...</p>
+                <p><span className="spinner"></span>Analizando el texto con IA...</p>
               </div>
             )}
             <SugerenciasPanel

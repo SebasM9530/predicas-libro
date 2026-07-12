@@ -956,27 +956,39 @@ button { cursor: pointer; font-family: inherit; }
   outline-offset: 1px;
 }
 
-/* ---------- Barra de herramientas del editor ---------- */
+/* ---------- Barra de herramientas del editor (panel derecho, sticky) ---------- */
 .editor-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 10px 12px;
   margin-bottom: 12px;
-  background-color: var(--page-deep);
+  background-color: rgba(251,245,233,0.06);
+  border: 1px dashed rgba(201,163,92,0.35);
   border-radius: var(--radius);
-  border: 1px solid var(--line);
   flex-wrap: wrap;
+  position: sticky;
+  top: 24px;
+  z-index: 10;
+}
+
+.editor-toolbar__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  margin-right: 4px;
 }
 
 .editor-toolbar__btn {
   min-width: 32px;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(201,163,92,0.4);
   border-radius: var(--radius);
-  background-color: #fff;
-  color: var(--ink);
+  background-color: rgba(255,255,255,0.08);
+  color: var(--gold-bright);
   font-size: 14px;
   cursor: pointer;
   display: flex;
@@ -986,32 +998,32 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 .editor-toolbar__btn:hover {
-  background-color: var(--gold-soft);
+  background-color: rgba(201,163,92,0.2);
   border-color: var(--gold);
 }
 
 .editor-toolbar__btn--active {
-  background-color: var(--gold-soft);
-  border-color: var(--gold);
-  color: var(--cover);
+  background-color: rgba(201,163,92,0.3);
+  border-color: var(--gold-bright);
+  color: var(--gold-bright);
 }
 
 .editor-toolbar__separator {
   width: 1px;
   height: 24px;
-  background-color: var(--line);
-  margin: 0 4px;
+  background-color: rgba(201,163,92,0.3);
+  margin: 0 2px;
 }
 
 .editor-toolbar__select {
   height: 32px;
   padding: 0 8px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(201,163,92,0.4);
   border-radius: var(--radius);
-  background-color: #fff;
-  color: var(--ink);
+  background-color: rgba(255,255,255,0.08);
+  color: var(--gold-bright);
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1020,17 +1032,23 @@ button { cursor: pointer; font-family: inherit; }
   outline-offset: 1px;
 }
 
+.editor-toolbar__select option {
+  background-color: var(--cover-deep);
+  color: var(--gold-bright);
+}
+
 /* ---------- Efecto destello al navegar desde una sticky note ---------- */
 @keyframes destello {
   0%   { background-color: #F3E6C8; box-shadow: none; }
-  25%  { background-color: #C9A35C; box-shadow: 0 0 12px 4px rgba(201,163,92,0.7); }
-  50%  { background-color: #ECD8A8; box-shadow: 0 0 20px 6px rgba(201,163,92,0.5); }
-  75%  { background-color: #C9A35C; box-shadow: 0 0 12px 4px rgba(201,163,92,0.7); }
+  15%  { background-color: #C9A35C; box-shadow: 0 0 16px 6px rgba(201,163,92,0.9); }
+  35%  { background-color: #ECD8A8; box-shadow: 0 0 24px 8px rgba(201,163,92,0.6); }
+  55%  { background-color: #C9A35C; box-shadow: 0 0 16px 6px rgba(201,163,92,0.9); }
+  75%  { background-color: #ECD8A8; box-shadow: 0 0 12px 4px rgba(201,163,92,0.5); }
   100% { background-color: #F3E6C8; box-shadow: none; }
 }
 
 .mark--destello {
-  animation: destello 1.5s ease-in-out;
+  animation: destello 3.5s ease-in-out;
   border-radius: 3px;
 }
 
