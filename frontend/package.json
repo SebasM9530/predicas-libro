@@ -9,7 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tiptap/extension-bold": "^2.0.0",
     "@tiptap/extension-highlight": "^2.6.6",
+    "@tiptap/extension-italic": "^2.0.0",
+    "@tiptap/extension-text-style": "^2.0.0",
     "@tiptap/pm": "^2.6.6",
     "@tiptap/react": "^2.6.6",
     "@tiptap/starter-kit": "^2.6.6",
