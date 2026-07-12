@@ -239,4 +239,4 @@ function formatearFecha(fecha) {
   if (!fecha) return '';
   const d = new Date(fecha + 'T00:00:00');
   return d.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
-}
+}   

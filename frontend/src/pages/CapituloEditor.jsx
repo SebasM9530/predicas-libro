@@ -296,7 +296,7 @@ export default function CapituloEditorPage() {
             onEditorReady={setEditorActivo}
           />
 
-          <div>
+          <div className="panel-derecho">
             <BarraFormato editor={editorActivo} />
 
             {analizando && (

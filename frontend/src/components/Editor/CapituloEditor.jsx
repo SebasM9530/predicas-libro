@@ -179,7 +179,7 @@ function escapeHtml(texto) {
 // ─────────────────────────────────────────────────────────────
 
 export function BarraFormato({ editor }) {
-  const [tamanoActual, setTamanoActual] = useState('17px');
+  const [tamanoActual, setTamanoActual] = useState('16px');
 
   useEffect(() => {
     if (!editor) return;
@@ -228,14 +228,13 @@ export function BarraFormato({ editor }) {
         className="editor-toolbar__select"
         value={tamanoActual}
         onChange={(e) => aplicarTamano(e.target.value)}
-        title="Tamaño de texto"
+        title="Tamaño de texto (igual que Word)"
       >
-        <option value="12px">12px</option>
-        <option value="14px">14px</option>
-        <option value="17px">Normal</option>
-        <option value="18px">18px</option>
-        <option value="20px">20px</option>
-        <option value="24px">24px</option>
+        <option value="13px">10</option>
+        <option value="16px">12 — Normal</option>
+        <option value="19px">14</option>
+        <option value="21px">16</option>
+        <option value="24px">18</option>
       </select>
     </div>
   );

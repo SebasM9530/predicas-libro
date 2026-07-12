@@ -962,14 +962,11 @@ button { cursor: pointer; font-family: inherit; }
   align-items: center;
   gap: 6px;
   padding: 10px 12px;
-  margin-bottom: 12px;
   background-color: rgba(251,245,233,0.06);
   border: 1px dashed rgba(201,163,92,0.35);
   border-radius: var(--radius);
   flex-wrap: wrap;
-  position: sticky;
-  top: 24px;
-  z-index: 10;
+  flex-shrink: 0;
 }
 
 .editor-toolbar__label {
@@ -1055,3 +1052,43 @@ button { cursor: pointer; font-family: inherit; }
 /* Soporte de negrilla e italica dentro del manuscrito */
 .manuscript-page .ProseMirror strong { font-weight: 700; }
 .manuscript-page .ProseMirror em { font-style: italic; }
+
+/* ---------- Panel derecho: barra formato + notas + instrucciones ---------- */
+/* Todo el panel derecho es sticky como bloque — la barra de formato
+   queda arriba fija, las notas tienen su propio scroll interno,
+   y el cuadro de instrucciones queda abajo. Ninguno se superpone. */
+.panel-derecho {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+/* Dentro del panel-derecho, el marginalia-wrapper ya no necesita
+   ser sticky (el padre lo es) — solo ocupa el espacio disponible */
+.panel-derecho .marginalia-wrapper {
+  position: static;
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Las notas tienen su scroll interno dentro del wrapper */
+.panel-derecho .marginalia {
+  position: static;
+  flex: 1;
+  min-height: 0;
+}
+
+/* El cuadro de instrucciones no crece, se queda abajo */
+.panel-derecho .marginalia--instrucciones {
+  flex-shrink: 0;
+  max-height: 280px;
+  overflow-y: auto;
+}
