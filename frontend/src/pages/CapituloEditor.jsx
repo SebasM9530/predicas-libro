@@ -1,4 +1,3 @@
-import CapituloEditorComponent, { BarraFormato } from '../components/Editor/CapituloEditor';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
@@ -10,7 +9,7 @@ import {
   despromoverCapitulo,
 } from '../services/api';
 import { usePollingEstado } from '../hooks/usePollingEstado';
-import CapituloEditorComponent from '../components/Editor/CapituloEditor';
+import CapituloEditorComponent, { BarraFormato } from '../components/Editor/CapituloEditor';
 import SugerenciasPanel from '../components/SugerenciasPanel/SugerenciasPanel';
 
 const ETIQUETAS_ESTADO = {
@@ -37,8 +36,8 @@ export default function CapituloEditorPage() {
   const [sugerencias, setSugerencias] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [sugerenciaActivaId, setSugerenciaActivaId] = useState(null);
+  const [editorActivo, setEditorActivo] = useState(null);
 
-  const [editorActivo, setEditorActivo] = useState(null); 
   const [titulo, setTitulo] = useState('');
   const [fecha, setFecha] = useState('');
   const [editando, setEditando] = useState(false);
@@ -138,13 +137,10 @@ export default function CapituloEditorPage() {
   async function handleSugerenciasActualizadas() {
     const sugs = await listarSugerencias(id);
     setSugerencias(sugs);
-
     const cap = await obtenerCapitulo(id);
     setCapitulo(cap);
   }
 
-  // Clic en una nota del panel: activarla (esto dispara el scroll hacia
-  // el fragmento resaltado, manejado dentro de CapituloEditorComponent)
   function handleSeleccionarSugerencia(idSug) {
     setSugerenciaActivaId(idSug);
   }
@@ -301,7 +297,6 @@ export default function CapituloEditorPage() {
           />
 
           <div>
-            {/* Barra de formato sticky en el panel derecho */}
             <BarraFormato editor={editorActivo} />
 
             {analizando && (
