@@ -591,6 +591,45 @@ button { cursor: pointer; font-family: inherit; }
 
 @media (max-width: 920px) {
   .editor-layout { grid-template-columns: 1fr; }
+
+  /* En pantallas angostas (celular) el panel derecho deja de ser "sticky".
+     Antes se quedaba pegado con una altura fija (100vh) al pasar a una
+     sola columna, así que al bajar la página el bloque nunca se movía
+     y sus 3 recuadros (barra de formato, notas, instrucciones) terminaban
+     recortados o superpuestos. Ahora el panel fluye normal debajo del
+     manuscrito: baja junto con el resto de la página como cualquier otro
+     bloque, y cada recuadro ocupa su propia altura sin cortarse. */
+  .editor-layout > div:last-child {
+    position: static;
+    top: auto;
+  }
+
+  .panel-derecho {
+    position: static;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .panel-derecho .marginalia-wrapper {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .panel-derecho .marginalia {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .panel-derecho .marginalia--instrucciones {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .marginalia__apply-bar {
+    position: static;
+  }
 }
 
 /* ---------- Manuscript page (Tiptap editor) ---------- */
