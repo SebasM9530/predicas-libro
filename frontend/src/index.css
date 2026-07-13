@@ -584,7 +584,7 @@ button { cursor: pointer; font-family: inherit; }
    position:sticky en .marginalia-wrapper tenga espacio donde deslizarse.
    Sin esto el sticky queda anclado arriba y no baja con el scroll. */
 .editor-layout > div:last-child {
-  align-self: stretch;
+  align-self: start;
   position: relative;
 }
 
@@ -968,12 +968,6 @@ button { cursor: pointer; font-family: inherit; }
   border-radius: var(--radius);
   flex-wrap: wrap;
   flex-shrink: 0;
-  
-  margin-bottom: 12px;
-  position: sticky;
-  top: 24px;
-  z-index: 10;
-  flex-shrink: 0;
 }
 
 .editor-toolbar__label {
@@ -1067,7 +1061,7 @@ button { cursor: pointer; font-family: inherit; }
 .panel-derecho {
   position: sticky;
   top: 16px;
-  max-height: calc(100vh - 32px);
+  height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
   gap: 10px;
