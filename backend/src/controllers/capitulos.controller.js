@@ -66,8 +66,8 @@ export async function listarCapitulos(req, res) {
   try {
     const { data, error } = await supabase
       .from('capitulos')
-      .select('id, numero_orden, titulo, fecha_sermon, estado, promovido, costo_ia_usd, created_at, updated_at')
-      .order('created_at', { ascending: true });
+      .select('id, numero_orden, titulo, fecha_sermon, estado, promovido, created_at, updated_at')
+      .order('created_at', { ascending: false });
 
     if (error) throw error;
 
