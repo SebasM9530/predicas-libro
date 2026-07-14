@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { listarCapitulos, subirCapitulo } from '../services/api';
+import { listarCapitulos, subirCapitulo, obtenerLibro } from '../services/api';
 
 const ETIQUETAS_ESTADO = {
   pendiente: 'Pendiente',
@@ -23,6 +23,7 @@ export default function Dashboard() {
   const [archivo, setArchivo] = useState(null);
   const [fecha, setFecha] = useState('');
   const [titulo, setTitulo] = useState('');
+  const [config, setConfig] = useState(null);
 
   const inputRef = useRef(null);
 
@@ -39,8 +40,18 @@ export default function Dashboard() {
     }
   }
 
+  async function cargarConfig() {
+    try {
+      const { config } = await obtenerLibro();
+      setConfig(config);
+    } catch (err) {
+      console.error('No se pudo cargar el gasto estimado:', err);
+    }
+  }
+
   useEffect(() => {
     cargarCapitulos();
+    cargarConfig();
     const intervalo = setInterval(cargarCapitulos, 10000);
     return () => clearInterval(intervalo);
   }, []);
@@ -98,6 +109,16 @@ export default function Dashboard() {
       <p className="page__eyebrow">Tu colección de sermones</p>
       <h1 className="page__title">Capítulos del libro</h1>
       <hr className="page__rule" />
+
+      {config && config.gasto_total_usd != null && (
+        <p style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'rgba(248,237,214,0.55)', marginTop: -20, marginBottom: 24 }}>
+          Gasto estimado en IA: ${Number(config.gasto_total_usd).toFixed(2)} USD
+          {config.saldo_restante_usd != null && (
+            <> · Saldo estimado restante: ${Number(config.saldo_restante_usd).toFixed(2)} USD</>
+          )}
+          {' '}(estimado nuestro, no un dato en vivo de OpenAI — actualiza tu saldo real cuando recargues)
+        </p>
+      )}
 
       <div className="panel">
         <span className="panel__ribbon"></span>
@@ -200,7 +221,7 @@ export default function Dashboard() {
           <div className="chapter-list">
             {capitulos.map((cap, i) => (
               <Link to={`/capitulos/${cap.id}`} key={cap.id} className="chapter-card">
-                <span className="chapter-card__num">{String(capitulos.length - i).padStart(2, '0')}</span>
+                <span className="chapter-card__num">{String(i + 1).padStart(2, '0')}</span>
                 <div className="chapter-card__body">
                   <div className="chapter-card__title">
                     {cap.titulo || `Sermón del ${cap.fecha_sermon}`}
@@ -208,6 +229,7 @@ export default function Dashboard() {
                   <div className="chapter-card__meta">
                     {cap.fecha_sermon}
                     {cap.promovido && ' · En el libro'}
+                    {cap.costo_ia_usd > 0 && ` · ~$${Number(cap.costo_ia_usd).toFixed(2)} USD en IA`}
                   </div>
                 </div>
                 <span className={`tag tag--${cap.estado}`}>
